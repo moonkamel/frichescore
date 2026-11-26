@@ -391,6 +391,29 @@ def ia_question(r: QuestionReq):
         raise HTTPException(422, str(e))
 
 
+@app.post("/api/sites/{sid}/note")
+def ia_note(sid: str, r: SiteReq):
+    """Note d'analyse rédigée par l'IA à partir des données du site (usage affiché)."""
+    from .ia.client import IAError
+    try:
+        return service.ia_note(sid, _usage(r.usage), r.weights, r.d5)
+    except KeyError:
+        raise HTTPException(404, "site introuvable")
+    except (IAError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/ia/jumeau")
+def ia_jumeau(r: CompareReq):
+    from .ia.client import IAError
+    try:
+        return service.ia_jumeau(r.a.model_dump(), r.b.model_dump(), r.weights, r.d5)
+    except KeyError:
+        raise HTTPException(404, "site introuvable")
+    except (IAError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
 class CommunesReq(BaseModel):
     codes_insee: list[str] | None = None
     rafraichir: bool = False

@@ -152,6 +152,19 @@ def site_pdf(detail: dict, usage: str, g: dict, weights: dict, profile_label: st
                            ("BOX", (0, 0), (-1, -1), 0.5, LINE)]))
     el.append(t)
 
+    note = (detail.get("note_ia") or {}).get("note")
+    if note:
+        el.append(P("Note d'analyse", "h2"))
+        el.append(P(f"Rédigée par IA ({detail['note_ia'].get('modele')}) le {str(detail['note_ia'].get('created_at'))[:10]} "
+                    "à partir des seules données FricheScore de cette fiche ; à relire avant diffusion.", "small"))
+        for para in note.get("synthese", []):
+            el.append(P(para))
+        if note.get("points_vigilance"):
+            el.append(P("Points de vigilance : " + " ; ".join(note["points_vigilance"])))
+        if note.get("prochaine_etape"):
+            el.append(P("Prochaine étape : " + note["prochaine_etape"], "cellb"))
+        if note.get("chiffres_a_verifier"):
+            el.append(P("Chiffres non retrouvés dans les données, à vérifier : " + ", ".join(note["chiffres_a_verifier"]), "warn"))
     el.append(P("Les trois facteurs qui pèsent le plus", "h2"))
     for d in g["drivers"]:
         el.append(P(f"{'▲' if d['effet'] > 0 else '▼'} {d['label']} ({d['effet']:+.1f} pt sur le global)"))

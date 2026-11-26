@@ -454,6 +454,7 @@ function renderDrawer() {
       <div class="small muted" style="margin-top:4px">confiance ${fmt(ur.conf[k], 2)}${k === "d3" ? " · plus c'est haut, plus c'est pénalisant" : ""}${k === "d5" && !S.d5 ? " · dimension désactivée" : ""}</div></div>`; }).join("")}
     </div></div>
 
+    ${noteCard(d)}
     <div class="card" id="whatif-card"><h3>Contester le score</h3>
       <p class="small muted" style="margin:4px 0 10px">Modifiez une donnée pour voir l'effet sur le score — sans rien enregistrer. Pour enregistrer une donnée de terrain vérifiée, utilisez le formulaire « Données terrain » plus bas.</p>
       <div class="whatif">${indicatorPicker("wi")}<button class="btn sec" id="wi-add">Ajouter l'hypothèse</button></div>
@@ -492,6 +493,34 @@ function renderDrawer() {
     <div class="card"><h3>Fiche de vie de la donnée</h3><p class="small muted" style="margin:4px 0 8px">Source, date et niveau de confiance de chaque indicateur. Les lignes surlignées ont plus de 10 ans.</p>${ficheVie(d.fiche_vie)}</div>
   </div>`;
   bindDrawer();
+}
+function noteCard(d) {
+  const st = S.drawer.docs && S.drawer.docs.statut;
+  if (!st) return "";
+  const n = d.note_ia;
+  const head = `<div class="row" style="justify-content:space-between;align-items:center"><h3 style="flex:1">Note d'analyse (IA)</h3>
+    ${st.active ? `<button class="btn sm ${n ? "sec" : ""}" id="note-go" style="flex:0;white-space:nowrap">${n ? "Régénérer" : "Rédiger la note"}</button>` : ""}</div>`;
+  if (!st.active) return `<div class="card">${head}<p class="small muted">Activez l'IA (clé ANTHROPIC_API_KEY) pour obtenir une note d'analyste rédigée à partir de ces données.</p></div>`;
+  if (!n) return `<div class="card" id="note-card">${head}<p class="small muted">Une note de pré-cadrage (synthèse, points forts, vigilance, prochaine étape) rédigée à partir des seules données de cette fiche, pour l'usage ${esc(S.meta.usages[d.usage])}.</p><div id="note-out"></div></div>`;
+  const x = n.note;
+  return `<div class="card" id="note-card">${head}
+    <div class="small muted">Rédigée par IA le ${esc(n.created_at.replace("T", " "))} pour l'usage ${esc(S.meta.usages[n.usage] || n.usage)} · ${fmt(n.cout_usd, 3)} $ · à relire avant diffusion</div>
+    <h4 style="margin-top:8px;text-transform:none;letter-spacing:0">${esc(x.titre)}</h4>
+    ${x.synthese.map((p) => `<p style="margin:6px 0;line-height:1.5">${esc(p)}</p>`).join("")}
+    <div class="grid2" style="margin-top:6px"><div><h4>Points forts</h4><ul class="small">${x.points_forts.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>
+      <div><h4>Points de vigilance</h4><ul class="small">${x.points_vigilance.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div></div>
+    <div class="alert info"><b>Prochaine étape :</b> ${esc(x.prochaine_etape)}</div>
+    <p class="small muted"><b>Fiabilité :</b> ${esc(x.fiabilite)}</p>
+    ${x.chiffres_a_verifier && x.chiffres_a_verifier.length ? `<div class="alert bad small">Chiffres non retrouvés dans les données de la fiche, à vérifier : ${x.chiffres_a_verifier.map(esc).join(", ")}</div>` : ""}
+    <div id="note-out"></div></div>`;
+}
+function bindNote() {
+  const b = $("#note-go"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true; $("#note-out").innerHTML = `<div class="loading small">Rédaction en cours (quelques secondes)…</div>`;
+    try { await api(`/api/sites/${encodeURIComponent(S.drawer.id)}/note`, { usage: S.drawer.data.usage, weights: S.weights, d5: S.d5 }); openDrawer(S.drawer.id, S.drawer.data.usage, true); }
+    catch (e) { $("#note-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; b.disabled = false; }
+  };
 }
 function docsCard() {
   const D = S.drawer.docs;
@@ -644,6 +673,7 @@ async function runWhatif(silent) {
 function bindDrawer() {
   const p = $("#drawer-panel");
   bindDocs();
+  bindNote();
   p.querySelectorAll(".utabs button").forEach((b) => (b.onclick = () => { S.drawer.data.usage = b.dataset.u; S.drawer.usage = b.dataset.u; renderDrawer(); }));
   bindValueInput("wi"); bindValueInput("fd");
   const pdfb = $("#d-pdf"); if (pdfb) pdfb.onclick = () => download(`/api/sites/${encodeURIComponent(S.drawer.id)}/pdf`, { usage: S.drawer.data.usage, weights: S.weights, d5: S.d5, profile: S.profile }, `frichescore_${S.drawer.id}.pdf`);
@@ -1084,6 +1114,13 @@ function renderJumeau() {
   document.querySelectorAll(".j-usage").forEach((s) => (s.onchange = () => (J[s.dataset.k].usage = s.value)));
   document.querySelectorAll("[data-e]").forEach((i) => (i.onchange = () => { const v = i.type === "number" ? +i.value : i.value; J[i.dataset.e].extension[i.dataset.f] = v; }));
   $("#j-run").onclick = runCompare;
+  const jia = $("#jia-go");
+  if (jia) jia.onclick = async () => {
+    jia.disabled = true; $("#jia-out").innerHTML = `<div class="loading small">Rédaction en cours…</div>`;
+    const side = (x) => (x.extension ? { usage: x.usage, extension: typeof x.extension === "object" ? x.extension : {} } : { id: x.id, usage: x.usage });
+    try { S.jumeauIA = await api("/api/ia/jumeau", { a: side(S.jumeau.a), b: side(S.jumeau.b), weights: S.weights, d5: S.d5 }); renderJumeau(); }
+    catch (e) { $("#jia-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; jia.disabled = false; }
+  };
   if (!J.a.id && !J.a.extension && ev[0]) { J.a.id = ev[0].id; renderJumeau(); }
 }
 async function runCompare() {
@@ -1092,6 +1129,7 @@ async function runCompare() {
   const out = $("#j-out"); if (out) out.innerHTML = `<div class="card loading">Comparaison…</div>`;
   try {
     S.jumeauRes = await api("/api/compare", { a: side(J.a), b: side(J.b), weights: S.weights, d5: S.d5 });
+    S.jumeauIA = null;
     if (S.tab === "jumeau") renderJumeau();
   } catch (e) { if ($("#j-out")) $("#j-out").innerHTML = `<div class="card">Erreur : ${esc(e.message)}</div>`; }
 }
@@ -1105,7 +1143,15 @@ function cmpHtml(r) {
      <span>Financements</span><b>${x.impact.eligibilites.length}</b></div>
      <h4 style="margin-top:10px">Facteurs déterminants</h4>${driversHtml(x.global.drivers)}
      ${x.blockers.map((b) => `<div class="alert bad">${esc(b)}</div>`).join("")}</div>`;
-  return `<div class="synth">${r.synthese.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
+  const cj = S.jumeauIA;
+  const iaBlock = `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h3 style="flex:1">Conclusion argumentée (IA)</h3>
+      <button class="btn sm ${cj ? "sec" : ""}" id="jia-go" style="flex:0;white-space:nowrap">${cj ? "Régénérer" : "Rédiger la conclusion"}</button></div>
+    <div id="jia-out">${cj ? `${cj.conclusion.map((l) => `<p style="margin:6px 0">${esc(l)}</p>`).join("")}
+      ${cj.nuances.length ? `<h4>Nuances</h4><ul class="small">${cj.nuances.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      ${cj.conditions_de_bascule.length ? `<h4>Ce qui inverserait la recommandation</h4><ul class="small">${cj.conditions_de_bascule.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      ${cj.chiffres_a_verifier.length ? `<div class="alert bad small">Chiffres non retrouvés dans les données, à vérifier : ${cj.chiffres_a_verifier.map(esc).join(", ")}</div>` : ""}
+      <div class="small muted">Rédigée par IA à partir des deux dossiers FricheScore · ${fmt(cj.cout_usd, 3)} $</div>` : `<p class="small muted">Rédige une conclusion nuancée à partir des deux dossiers : lequel est préférable, les nuances qui comptent et les conditions qui inverseraient la recommandation.</p>`}</div></div>`;
+  return `<div class="synth">${r.synthese.map((l) => `<div>${esc(l)}</div>`).join("")}</div>${iaBlock}
   <div class="card"><div class="pairbar"><span></span><b class="small">${esc(A.nom)}</b><b class="small">${esc(B.nom)}</b>
     ${DIMS.map((k) => `<span>${esc(S.meta.dimensions[k])}</span>${[A, B].map((x) => `<div class="val"><div class="bar"><i style="width:${x.dims[k]}%;background:${colorFor(x.dims[k], k === "d3")}"></i></div><b>${fmt(x.dims[k])}</b></div>`).join("")}`).join("")}
   </div></div>

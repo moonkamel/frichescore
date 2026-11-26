@@ -100,7 +100,8 @@ def site_detail(sid: str, weights: dict | None, d5: bool, usage: str | None = No
     stages = {sid: (base["portfolio"] or {}).get("stage")}
     z = zan_clock(ranked, {sid: rec}, stages)["correspondances"]
     return {**base, "evaluable": True, "usage": usage, "usages": ev["usages"], "globals": globals_,
-            "recommandations": recommendations(rec, ur), "zan": z, "weights": w}
+            "recommandations": recommendations(rec, ur), "zan": z, "weights": w,
+            "note_ia": db.ia_note_latest(sid, usage)}
 
 
 # ---------------------------------------------------------- contre-analyse
@@ -711,3 +712,28 @@ def ia_question(question: str, perimeter: dict, perimeter_label: str, usage, wei
     if r["hypotheses"]:
         out["scenario"] = stress(perimeter, usage, weights, d5, r["hypotheses"], r["top_n"])
     return out
+
+
+def ia_note(sid: str, usage, weights, d5) -> dict:
+    """Note d'analyse rédigée par l'IA à partir du dossier calculé par FricheScore."""
+    from .ia import client as IC
+    from .ia import redaction as RD
+    d = site_detail(sid, weights, d5, usage)
+    if not d["evaluable"]:
+        raise ValueError("site non évaluable : pas de note possible")
+    u = d["usage"]
+    r = RD.note_site(RD.dossier_site(d, u))
+    cout = IC.cout_usd(r["usage"])
+    db.ia_log("note_site", sid, r["usage"], cout)
+    db.ia_note_save(sid, u, r["note"], r["modele"], cout)
+    return db.ia_note_latest(sid, u)
+
+
+def ia_jumeau(a: dict, b: dict, weights, d5) -> dict:
+    from .ia import client as IC
+    from .ia import redaction as RD
+    res = compare_sites(a, b, weights, d5)
+    r = RD.conclusion_jumeau(RD.dossier_jumeau(res))
+    cout = IC.cout_usd(r["usage"])
+    db.ia_log("conclusion_jumeau", f"{res['a'].get('nom')} / {res['b'].get('nom')}", r["usage"], cout)
+    return {**r["conclusion"], "cout_usd": cout, "modele": r["modele"]}
