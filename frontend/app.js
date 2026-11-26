@@ -1068,6 +1068,7 @@ async function renderDonnees() {
     try {
       const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });
       $("#ct-out").innerHTML = `<div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
+        ${r.diagnostic_reseau ? netDiag(r.diagnostic_reseau) : ""}
         ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
         ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;
     } catch (e) { $("#ct-out").innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
@@ -1081,6 +1082,13 @@ async function renderDonnees() {
       S.meta = await api("/api/meta"); await loadSites(); renderSide();
     } catch (e) { $("#cf-out").textContent = "Erreur : " + e.message; }
   };
+}
+function netDiag(d) {
+  return `<div class="card" style="background:#fafbf9;margin:8px 0"><h4>Diagnostic réseau automatique — ${esc(d.hote || "")}</h4>
+    <p style="margin:6px 0"><b>${esc(d.conclusion || "")}</b></p>
+    ${(d.adresses || []).length ? `<table class="fv"><thead><tr><th>Adresse</th><th>Famille</th><th>Connexion TCP (port 443)</th><th>Durée</th></tr></thead><tbody>
+      ${d.adresses.map((a) => `<tr><td><code>${esc(a.ip)}</code></td><td>${a.famille}</td><td>${a.ok ? `<span class="chip ok">réussie</span>` : `<span class="chip bad">échec</span> ${esc(a.erreur || "")}`}</td><td class="num">${a.duree_ms} ms</td></tr>`).join("")}</tbody></table>` : ""}
+    <p class="small muted" style="margin:6px 0 0">IPv4 forcée : ${d.ipv4_force ? "oui" : "non"} · proxy configuré pour FricheScore : ${d.proxy && Object.keys(d.proxy).length ? esc(Object.entries(d.proxy).map(([k, v]) => k + "=" + v).join(", ")) : "aucun"}</p></div>`;
 }
 function importReport(r, fname) {
   const dry = r.mode === "vérification";

@@ -28,9 +28,11 @@ import csv
 import io
 import json
 import os
+import socket
 import statistics
 import time
 from datetime import date
+from urllib.parse import urlparse
 
 import httpx
 
@@ -47,6 +49,10 @@ TIMEOUT = float(os.environ.get("FRICHESCORE_HTTP_TIMEOUT", "60"))
 RETRIES = int(os.environ.get("FRICHESCORE_HTTP_RETRIES", "1"))  # nouvelle tentative après un délai dépassé
 MAX_PAGES = 50
 
+# Forcer IPv4 : dans Docker Desktop (Windows/macOS), l'IPv6 sortant est souvent non routé ; sans
+# repli automatique, la connexion attend alors jusqu'au délai maximal. Désactivable : FRICHESCORE_FORCE_IPV4=0.
+FORCE_IPV4 = os.environ.get("FRICHESCORE_FORCE_IPV4", "1").lower() not in ("0", "false", "non", "no")
+
 # Transport injectable (tests : httpx.MockTransport)
 TRANSPORT: httpx.BaseTransport | None = None
 
@@ -59,8 +65,66 @@ class ConnectorError(Exception):
         self.message, self.url, self.status, self.body = message, url, status, body
 
 
+def _transport() -> httpx.BaseTransport | None:
+    if TRANSPORT is not None:
+        return TRANSPORT
+    if FORCE_IPV4:
+        return httpx.HTTPTransport(local_address="0.0.0.0")  # lier une adresse IPv4 = connexions IPv4 uniquement
+    return None
+
+
+def proxy_env() -> dict:
+    out = {}
+    for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"):
+        v = os.environ.get(k)
+        if v:
+            out[k] = v.split("@")[-1] if "@" in v else v  # ne jamais afficher d'identifiants
+    return out
+
+
+def network_diagnostic(url: str, port: int = 443, timeout: float = 5.0) -> dict:
+    """Diagnostic réseau depuis la machine (ou le conteneur) qui exécute FricheScore :
+    résolution DNS, puis tentative de connexion TCP sur chaque adresse IPv4 et IPv6."""
+    host = urlparse(url).hostname or url
+    diag = {"hote": host, "ipv4_force": FORCE_IPV4, "proxy": proxy_env(), "adresses": [], "conclusion": ""}
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        diag["conclusion"] = (f"le nom « {host} » ne se résout pas (DNS) : {e}. Sous Docker, vérifier la configuration DNS "
+                              "de Docker Desktop ou le VPN ; sinon, l'adresse de l'API est peut-être erronée.")
+        return diag
+    seen = set()
+    for fam, _t, _p, _c, sa in infos:
+        ip = sa[0]
+        if ip in seen:
+            continue
+        seen.add(ip)
+        t0 = time.monotonic()
+        try:
+            with socket.create_connection((ip, port), timeout=timeout):
+                ok, err = True, None
+        except OSError as e:
+            ok, err = False, (str(e) or type(e).__name__)[:120]
+        diag["adresses"].append({"ip": ip, "famille": "IPv6" if fam == socket.AF_INET6 else "IPv4", "ok": ok,
+                                 "duree_ms": round((time.monotonic() - t0) * 1000), "erreur": err})
+    v4 = [a for a in diag["adresses"] if a["famille"] == "IPv4"]
+    v6 = [a for a in diag["adresses"] if a["famille"] == "IPv6"]
+    if any(a["ok"] for a in v4):
+        diag["conclusion"] = ("le serveur est joignable en IPv4 depuis cette machine"
+                              + (" mais pas en IPv6 : garder l'option IPv4 forcée (réglage par défaut)." if v6 and not any(a["ok"] for a in v6) else ".")
+                              + (" Un proxy est configuré : s'il bloque ce domaine, l'appel HTTPS échouera malgré tout." if diag["proxy"] else ""))
+    elif any(a["ok"] for a in v6):
+        diag["conclusion"] = "le serveur n'est joignable qu'en IPv6 : désactiver l'IPv4 forcée (FRICHESCORE_FORCE_IPV4=0)."
+    else:
+        diag["conclusion"] = ("aucune adresse du serveur n'est joignable depuis cette machine. Si FricheScore tourne dans Docker "
+                              "alors que le navigateur ou PowerShell accèdent au site, le PC passe sans doute par un proxy ou un VPN "
+                              "que le conteneur ne connaît pas : renseigner HTTPS_PROXY avant « docker compose up », ou lancer "
+                              "FricheScore sans Docker." + ("" if diag["proxy"] else " Aucun proxy n'est configuré pour FricheScore."))
+    return diag
+
+
 def _client(timeout: float | None = None) -> httpx.Client:
-    return httpx.Client(timeout=httpx.Timeout(timeout or TIMEOUT, connect=15.0), follow_redirects=True, transport=TRANSPORT,
+    return httpx.Client(timeout=httpx.Timeout(timeout or TIMEOUT, connect=15.0), follow_redirects=True, transport=_transport(),
                         headers={"User-Agent": "FricheScore/0.2 (outil local)", "Accept": "application/json, text/csv, */*"})
 
 
@@ -389,6 +453,12 @@ def test_connection(source: str, code_insee: str = "59350", lat: float = 50.6329
     except ConnectorError as e:
         res.update(erreur=e.message, url=res["url"] or e.url, http_status=res["http_status"] or e.status,
                    apercu_brut=res["apercu_brut"] or e.body)
+        if e.status is None and TRANSPORT is None:  # échec réseau (pas une erreur HTTP) : diagnostic automatique
+            target = e.url or base_url or {"cartofriches": CARTOFRICHES_URL, "georisques": GEORISQUES_URL}.get(source, GEODVF_URL)
+            try:
+                res["diagnostic_reseau"] = network_diagnostic(target)
+            except Exception as ex:  # noqa: BLE001
+                res["diagnostic_reseau"] = {"conclusion": f"diagnostic impossible : {ex}"}
     except Exception as e:  # noqa: BLE001 — le diagnostic ne doit jamais planter
         res["erreur"] = f"erreur inattendue ({type(e).__name__}) : {str(e)[:300]}"
     res["duree_ms"] = round((time.monotonic() - t0) * 1000)

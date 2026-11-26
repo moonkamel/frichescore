@@ -200,3 +200,21 @@ def test_nouvelle_tentative_apres_delai(mock):
 
 def test_adresse_cartofriches_alignee_sur_client_officiel():
     assert K.CARTOFRICHES_URL.endswith("/cartofriches/friches") or "CARTOFRICHES_URL" in __import__("os").environ
+
+
+def test_diagnostic_reseau_dns_inconnu():
+    d = K.network_diagnostic("https://hote-inexistant.invalid/api")
+    assert d["hote"] == "hote-inexistant.invalid" and "DNS" in d["conclusion"]
+
+
+def test_transport_ipv4_par_defaut(monkeypatch):
+    monkeypatch.setattr(K, "TRANSPORT", None)
+    monkeypatch.setattr(K, "FORCE_IPV4", True)
+    assert isinstance(K._transport(), httpx.HTTPTransport)
+    monkeypatch.setattr(K, "FORCE_IPV4", False)
+    assert K._transport() is None
+
+
+def test_proxy_env_masque_identifiants(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:secret@proxy.local:8080")
+    assert "secret" not in str(K.proxy_env())
