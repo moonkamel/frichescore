@@ -116,3 +116,73 @@ def test_enrichissement_partiel_sans_planter(mock):
 def test_distance_mairie():
     assert abs(T.distance_km(50.6372, 3.0702, 50.6372, 3.0702)) < 1e-9
     assert 1.0 < T.distance_km(50.6372, 3.0702, 50.6166, 3.0745) < 2.6
+
+
+# --------------------- formats observés sur les sources réelles (rapport du 26/11/2026)
+LOVAC_RES = [
+    {"title": "LOVAC open data 2020 à 2026 version xlsx", "format": "xlsx",
+     "url": "https://static.data.gouv.fr/resources/logements-vacants-du-parc-prive-par-commune-departement-region-france/x/lovac.xlsx"},
+    {"title": "Lovac_opendata_schema.csv", "format": "csv",
+     "url": "https://static.data.gouv.fr/resources/logements-vacants-du-parc-prive-par-commune-departement-region-france/x/schema.csv"},
+    {"title": "Lovac_opendata_Communes.csv", "format": "csv", "last_modified": "2026-06-25T10:00:00",
+     "url": "https://static.data.gouv.fr/resources/logements-vacants-du-parc-prive-par-commune-departement-region-france/x/communes.csv"},
+    {"title": "Lovac_opendata_Departements.csv", "format": "csv", "last_modified": "2026-06-25T10:00:00",
+     "url": "https://static.data.gouv.fr/resources/logements-vacants-du-parc-prive-par-commune-departement-region-france/x/dep.csv"},
+    {"title": "Lovac_opendata_France.csv", "format": "csv", "last_modified": "2026-06-25T16:37:00",
+     "url": "https://static.data.gouv.fr/resources/logements-vacants-du-parc-prive-par-commune-departement-region-france/x/fr.csv"},
+]
+
+
+def test_lovac_choisit_le_fichier_des_communes(mock):
+    mock(lambda req: httpx.Response(200, json={"resources": LOVAC_RES}))
+    assert T.resolve_resource("lovac")["titre"] == "Lovac_opendata_Communes.csv"
+
+
+def test_lovac_format_long_par_millesime(tmp_path):
+    p = write(tmp_path, "l.csv", "CODGEO_25;LIBGEO_25;Millésime;ff_pp_total;pp_vacant;pp_vacant_plus_2ans\n"
+                                 "59350;Lille;2024;120000;9000;3000\n59350;Lille;2026;125000;10000;3100\n"
+                                 "59512;Roubaix;2026;40000;s;s\n59512;Roubaix;2025;40000;5200;2000\n")
+    out, diag = T.parse_lovac(p, {"59350", "59512"})
+    assert diag["colonne_code"] == "CODGEO_25" and diag["colonne_millesime"] == "Millésime"
+    assert out == {"59350": 8.0, "59512": 13.0} and diag["annee"] == 2026  # Roubaix 2026 sous secret : millésime 2025
+
+
+def test_colonne_millesime_jamais_prise_pour_un_code(tmp_path):
+    p = write(tmp_path, "l.csv", "FR;Millésime;ff_pp_total;pp_vacant\nFrance;2024;1;1\nFrance;2025;1;1\n")
+    with pytest.raises(K.ConnectorError):
+        T.parse_lovac(p, {"59350"})
+
+
+def test_dido_millesime_le_plus_recent(mock):
+    seen = []
+
+    def h(req):
+        u = str(req.url)
+        seen.append(u)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés et commencés par commune", "format": "csv",
+                "url": "https://data.statistiques.developpement-durable.gouv.fr/dido/api/v1/datafiles/577a8a66-4157-4787-b00a-031b61afea61/csv"}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"rid": "577a8a66", "millesimes": [{"millesime": "2026-08", "rows": 1}, {"millesime": "2026-10", "rows": 1}]})
+        assert req.url.params["millesime"] == "2026-10" and req.url.params["withColumnName"] == "true"
+        return httpx.Response(200, text="DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n59;59350;2025-01;120\n")
+    mock(h)
+    path, meta = T.cached_file("sitadel")
+    assert meta["millesime"] == "2026-10" and path.read_text().startswith("DEP;COMM")
+
+
+def test_conso_enaf_lignes_annuelles_naf_arti(mock):
+    rows = [{"annee": a, "conso_act": 1, "conso_hab": 2, "conso_inc": 0, "conso_infra": 0, "conso_mix": 0,
+             "idcom": "59350", "idcomtxt": "Lille", "naf_arti": 30000} for a in range(2011, 2021)]
+    mock(lambda req: httpx.Response(200, json={"count": 10, "next": None, "results": rows}))
+    ha, diag = T.fetch_conso_enaf("59350")
+    assert diag["colonne_total"] == "naf_arti" and ha == 30.0 and diag["annees"] == list(range(2011, 2021))
+
+
+def test_cache_d_une_ancienne_version_ignore(mock, tmp_path):
+    (tmp_path / "lovac.json").write_text(json.dumps({"fichier": "lovac.csv", "telecharge_le_ts": T.time.time(), "titre": "Lovac_opendata_France.csv"}))
+    (tmp_path / "lovac.csv").write_text("FR;Millésime\n")
+    mock(lambda req: httpx.Response(200, json={"resources": LOVAC_RES}) if "/api/1/" in str(req.url)
+         else httpx.Response(200, text="CODGEO_25;Millésime;ff_pp_total;pp_vacant\n59350;2026;100;8\n"))
+    _p, meta = T.cached_file("lovac")
+    assert meta["titre"] == "Lovac_opendata_Communes.csv" and meta["version"] == T.CACHE_VERSION

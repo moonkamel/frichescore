@@ -30,13 +30,14 @@ GEO_API_URL = os.environ.get("GEO_API_URL", "https://geo.api.gouv.fr")
 DATAGOUV_API = os.environ.get("DATAGOUV_API", "https://www.data.gouv.fr/api/1")
 CEREMA_BASE = os.environ.get("CEREMA_API_URL", "https://apidf-preprod.cerema.fr")
 CACHE_MAX_AGE_DAYS = int(os.environ.get("FRICHESCORE_CACHE_JOURS", "30"))
+CACHE_VERSION = 2  # à incrémenter quand la règle de choix des fichiers change : les caches antérieurs sont ignorés
 
 # Jeux de données data.gouv.fr (identifiant « slug ») et critères de choix de la ressource
 DATASETS = {
     "zonage_abc": {"slug": "liste-des-communes-selon-le-zonage-abc", "label": "Zonage ABC",
                    "prefer": [r"ensemble des communes", r"liste.*communes"], "avoid": [r"reclass", r"d[ée]class", r"dictionnaire"]},
     "lovac": {"slug": "logements-vacants-du-parc-prive-par-commune-departement-region-france", "label": "LOVAC (logements vacants)",
-              "prefer": [r"communes?\b", r"commune"], "avoid": [r"d[ée]partement", r"r[ée]gion", r"france", r"epci", r"dictionnaire", r"documentation"]},
+              "prefer": [r"commune"], "avoid": [r"departement", r"region", r"france", r"epci", r"schema", r"dictionnaire", r"documentation"]},
     "sitadel": {"slug": "logements-autorises-et-commences-series-mensuelles-communales-en-date-de-prise-en-compte",
                 "label": "SITADEL (logements autorisés)", "prefer": [r"commun"], "avoid": [r"dictionnaire", r"documentation", r"m[ée]tadonn"]},
 }
@@ -93,10 +94,13 @@ def resolve_resource(name: str) -> dict:
         raise K.ConnectorError(f"aucune ressource dans le jeu de données « {cfg['slug']} »")
 
     def score(r):
-        t = _norm(f"{r.get('title', '')} {r.get('url', '')}")
+        # Le titre seul : l'adresse contient le nom du jeu de données (« …commune-departement-region-france »)
+        t = _norm(r.get("title", ""))
+        u = _norm(r.get("url", "")).split("?")[0]
         fmt = _norm(r.get("format") or "")
         sc = 0
-        sc += 10 if fmt in ("csv", "zip") or t.endswith((".csv", ".zip")) else -20
+        sc += 10 if fmt in ("csv", "zip") or t.endswith((".csv", ".zip")) or u.endswith((".csv", ".zip")) or "/dido/" in u else -20
+        sc -= 20 if t.endswith((".xlsx", ".xls", ".pdf")) or fmt in ("xlsx", "xls", "pdf") else 0
         sc += sum(5 for p in cfg["prefer"] if re.search(p, t))
         sc -= sum(15 for p in cfg["avoid"] if re.search(p, t))
         return (sc, r.get("last_modified") or r.get("created_at") or "")
@@ -106,13 +110,45 @@ def resolve_resource(name: str) -> dict:
             "candidats": [r.get("title") for r in res][:12]}
 
 
-def _download(url: str, dest: Path) -> None:
+DIDO = re.compile(r"(https?://[^/]+/dido/api/v1)/datafiles/([0-9a-f-]{20,})", re.I)
+
+
+def dido_params(url: str) -> tuple[str, dict, dict]:
+    """L'API DiDo (SDES) exige un millésime : on lit les métadonnées du fichier et on prend le plus récent."""
+    m = DIDO.search(url)
+    if not m:
+        return url, {}, {}
+    base, rid = m.group(1), m.group(2)
+    with K._client(60) as c:
+        meta, _f, _s = K._get(c, f"{base}/datafiles/{rid}")
+    mills = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k.lower().startswith("millesime") and isinstance(v, str) and re.match(r"\d{4}", v):
+                    mills.append(v)
+                walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x)
+    walk(meta)
+    if not mills:
+        raise K.ConnectorError("API DiDo : aucun millésime trouvé dans les métadonnées du fichier", f"{base}/datafiles/{rid}")
+    mil = max(mills)
+    return (f"{base}/datafiles/{rid}/csv",
+            {"millesime": mil, "withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false"},
+            {"millesime": mil, "millesimes_disponibles": sorted(set(mills))[-6:]})
+
+
+def _download(url: str, dest: Path, params: dict | None = None) -> None:
     tmp = dest.with_suffix(".part")
     with K._client(180) as c:
         try:
-            with c.stream("GET", url) as r:
+            with c.stream("GET", url, params=params) as r:
                 if r.status_code >= 400:
-                    raise K.ConnectorError(f"téléchargement refusé (HTTP {r.status_code})", url, r.status_code)
+                    body = r.read().decode("utf-8", errors="replace")[:300]
+                    raise K.ConnectorError(f"téléchargement refusé (HTTP {r.status_code}) : {body}", str(r.request.url), r.status_code)
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_bytes(1 << 16):
                         f.write(chunk)
@@ -126,15 +162,21 @@ def cached_file(name: str, refresh: bool = False) -> tuple[Path, dict]:
     d = cache_dir()
     meta_p = d / f"{name}.json"
     meta = json.loads(meta_p.read_text(encoding="utf-8")) if meta_p.exists() else None
-    fresh = meta and (time.time() - meta.get("telecharge_le_ts", 0)) < CACHE_MAX_AGE_DAYS * 86400
+    fresh = (meta and meta.get("version") == CACHE_VERSION
+             and (time.time() - meta.get("telecharge_le_ts", 0)) < CACHE_MAX_AGE_DAYS * 86400)
     path = d / (meta or {}).get("fichier", f"{name}.bin")
     if meta and fresh and path.exists() and not refresh:
         return path, meta
     info = resolve_resource(name)
     ext = ".zip" if info["url"].lower().split("?")[0].endswith(".zip") or _norm(info.get("format")) == "zip" else ".csv"
     path = d / f"{name}{ext}"
-    _download(info["url"], path)
-    meta = {**info, "fichier": path.name, "telecharge_le": date.today().isoformat(), "telecharge_le_ts": time.time()}
+    url, params, extra = dido_params(info["url"])
+    info.update(extra)
+    if extra.get("millesime"):
+        info["date"] = extra["millesime"]
+    _download(url, path, params)
+    meta = {**info, "fichier": path.name, "telecharge_le": date.today().isoformat(), "telecharge_le_ts": time.time(),
+            "version": CACHE_VERSION}
     meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return path, meta
 
@@ -178,10 +220,13 @@ CODE_COL = re.compile(r"^(codgeo|code_?insee|insee_?com|code_?commune|com(_?code
 
 
 def find_code_column(headers: list[str], rows: list[dict]) -> str | None:
+    """Colonne du code commune. Un code à 4 chiffres (zéro initial perdu) n'est accepté que dans une colonne
+    NOMMÉE comme un code : sinon une colonne d'années (« 2020 » -> « 02020 ») serait prise pour un code."""
     cands = [h for h in headers if CODE_COL.match(_norm(h).replace(" ", "_"))]
-    for h in cands + headers:
+    for h in cands + [h for h in headers if h not in cands]:
+        named = h in cands
         vals = [str(r.get(h) or "").strip() for r in rows[:200]]
-        ok = sum(1 for v in vals if re.fullmatch(r"(\d{5}|2[AB]\d{3})", _code(v)))
+        ok = sum(1 for v in vals if re.fullmatch(r"(\d{5}|2[AB]\d{3})", _code(v) if named else v))
         if vals and ok / len(vals) > 0.8:
             return h
     return None
@@ -226,12 +271,16 @@ def _num(v):
 
 
 def parse_lovac(path: Path, codes: set[str]) -> tuple[dict, dict]:
-    """Taux de vacance du parc privé. Cherche, pour le millésime le plus récent, une colonne de taux,
-    à défaut le rapport (logements vacants / parc privé total)."""
+    """Taux de vacance du parc privé (LOVAC). Deux formats acceptés :
+      * « long » (format observé en 2026) : une ligne par commune et par millésime, colonnes
+        Millésime / ff_pp_total / pp_vacant / pp_vacant_plus_2ans -> on garde le millésime le plus récent ;
+      * « large » : une colonne par année (pp_vacant_25, pp_total_25…) -> l'année la plus récente."""
     reader, headers = _reader(path)
     rows = list(reader)
     code_col = find_code_column(headers, rows)
     nh = {h: _norm(h) for h in headers}
+    longue = re.compile(r"(2_?ans|plus|long|fil|duree)")  # vacance de longue durée : on veut la vacance totale
+    year_col = next((h for h in headers if re.fullmatch(r"(millesime|annee|an|year)", nh[h])), None)
 
     def year(h):
         m = re.search(r"(20\d{2}|\d{2})$", nh[h])
@@ -239,21 +288,21 @@ def parse_lovac(path: Path, codes: set[str]) -> tuple[dict, dict]:
             return 0
         y = int(m.group(1))
         return y + 2000 if y < 100 else y
-    longue = re.compile(r"(2_?ans|plus|long|fil|duree)")  # vacance de longue durée : on veut la vacance totale
     rate = [h for h in headers if "taux" in nh[h] and "vac" in nh[h] and not longue.search(nh[h])]
     vac = [h for h in headers if "vacant" in nh[h] and "taux" not in nh[h] and not longue.search(nh[h])]
-    tot = [h for h in headers if ("total" in nh[h] or "parc" in nh[h] or "tot" in nh[h]) and "vac" not in nh[h]]
+    tot = [h for h in headers if ("total" in nh[h] or "parc" in nh[h]) and "vac" not in nh[h]]
     rate_col = max(rate, key=year) if rate else None
     vac_col = max(vac, key=year) if vac else None
     tot_col = None
     if vac_col:
         same = [h for h in tot if year(h) == year(vac_col)]
-        tot_col = (max(same, key=year) if same else (max(tot, key=year) if tot else None))
-    diag = {"colonnes": headers[:40], "colonne_code": code_col, "colonne_taux": rate_col, "colonne_vacants": vac_col,
-            "colonne_total": tot_col, "lignes": len(rows)}
+        tot_col = same[0] if same else (max(tot, key=year) if tot else None)
+    diag = {"colonnes": headers[:40], "colonne_code": code_col, "colonne_millesime": year_col, "colonne_taux": rate_col,
+            "colonne_vacants": vac_col, "colonne_total": tot_col, "lignes": len(rows)}
     if not code_col or not (rate_col or (vac_col and tot_col)):
-        raise K.ConnectorError("colonnes non identifiées dans le fichier LOVAC (code, taux ou vacants/total)")
-    out = {}
+        raise K.ConnectorError("colonnes non identifiées dans le fichier LOVAC (code commune, taux ou vacants/total) — "
+                               "le fichier retenu n'est peut-être pas celui des communes")
+    best: dict[str, tuple] = {}
     for r in rows:
         c = _code(r.get(code_col))
         if c not in codes:
@@ -264,12 +313,20 @@ def parse_lovac(path: Path, codes: set[str]) -> tuple[dict, dict]:
             if v is not None and v <= 1:
                 v *= 100
         if v is None and vac_col and tot_col:
-            a, b = _num(r.get(vac_col)), _num(r.get(tot_col))
-            if a is not None and b:
-                v = 100 * a / b
-        if v is not None and 0 <= v <= 60:
-            out[c] = round(v, 1)
-    diag["annee"] = year(rate_col or vac_col) or None
+            a_, b_ = _num(r.get(vac_col)), _num(r.get(tot_col))
+            if a_ is not None and b_:
+                v = 100 * a_ / b_
+        if v is None or not (0 <= v <= 60):
+            continue
+        y = 0
+        if year_col:
+            m = re.search(r"(19|20)\d{2}", str(r.get(year_col) or ""))
+            y = int(m.group(0)) if m else 0
+        if c not in best or y >= best[c][0]:
+            best[c] = (y, round(v, 1))
+    out = {c: v for c, (y, v) in best.items()}
+    ys = {y for y, _v in best.values() if y}
+    diag["annee"] = max(ys) if ys else (year(rate_col or vac_col) or None)
     return out, diag
 
 
@@ -334,12 +391,17 @@ def fetch_conso_enaf(code: str) -> tuple[float | None, dict]:
     if not rows:
         return None, diag
     keys = rows[0].keys()
-    total_col = next((k for k in keys if re.fullmatch(r"(conso_?(tot(ale?)?)?|naf_?art|conso_naf)", _norm(k))), None) \
+    total_col = next((k for k in keys if re.fullmatch(r"(naf_?arti?|conso_?(tot(ale?)?)?|conso_naf)", _norm(k))), None) \
         or next((k for k in keys if "conso" in _norm(k) and "tot" in _norm(k)), None)
     diag["colonne_total"] = total_col
     if total_col:
-        vals = [_num(r.get(total_col)) for r in rows]
-        tot = sum(v for v in vals if v)
+        # une ligne par année (format observé : annee, naf_arti, conso_hab, conso_act…) ; on borne à 2011-2020
+        def yr(r):
+            m = re.search(r"(19|20)\d{2}", str(r.get("annee") or ""))
+            return int(m.group(0)) if m else None
+        sel = [r for r in rows if yr(r) is None or 2011 <= yr(r) <= 2020]
+        diag["annees"] = sorted({yr(r) for r in sel if yr(r)})
+        tot = sum(v for v in (_num(r.get(total_col)) for r in sel) if v)
     else:  # une colonne par année : naf11art12, naf12art13, ...
         cols = [k for k in keys if re.fullmatch(r"naf\d{2}art\d{2}", _norm(k))]
         diag["colonnes_annuelles"] = cols
