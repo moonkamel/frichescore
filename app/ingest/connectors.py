@@ -41,8 +41,9 @@ from ..scoring.record import Provenance, Record
 from .mapping import row_to_record
 
 # Adresse et paramètres alignés sur le client officiel du Cerema (paquet PyPI « apifoncier2 ») :
-# base https://apidf-preprod.cerema.fr, point d'accès /cartofriches/friches (sans « / » final), page_size=500, délai 60 s.
-CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches/friches")
+# base https://apidf-preprod.cerema.fr, page_size=500, délai 60 s. Le point d'accès /cartofriches/friches ne
+# renvoie pas de géométrie ; /cartofriches/geofriches renvoie le même contenu en GeoJSON, avec le contour du site.
+CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches/geofriches")
 CARTOFRICHES_PAGE_SIZE = 500
 GEORISQUES_URL = os.environ.get("GEORISQUES_URL", "https://www.georisques.gouv.fr/api/v1")
 GEODVF_URL = os.environ.get("GEODVF_URL", "https://files.data.gouv.fr/geo-dvf/latest/csv")
@@ -304,6 +305,32 @@ def fetch_cartofriches(code_insee: str, base_url: str | None = None) -> tuple[li
     return cartofriches_records(rows)
 
 
+def field_report(rows: list[dict]) -> dict:
+    """Inventaire des champs réellement renvoyés : sert à caler les correspondances sur les vraies données."""
+    from .mapping import resolve_column
+    if not rows:
+        return {}
+    cols: dict[str, list] = {}
+    for r in rows:
+        for k, v in r.items():
+            cols.setdefault(k, []).append(v)
+    first = {k: (str(v)[:120] if v is not None else None) for k, v in rows[0].items()}
+    recon, non_recon, distinct = {}, [], {}
+    for k, vals in cols.items():
+        key = resolve_column(k)
+        if key:
+            recon[k] = key
+        else:
+            non_recon.append(k)
+        txt = [v for v in vals if isinstance(v, str) and v.strip()]
+        uniq = sorted(set(txt))
+        if txt and len(uniq) <= 25 and len(uniq) < len(vals):
+            distinct[k] = uniq
+        cols[k] = sum(1 for v in vals if v not in (None, "", []))
+    return {"premiere_friche_brute": first, "colonnes_reconnues": recon, "colonnes_non_reconnues": sorted(non_recon),
+            "taux_remplissage": {k: f"{n}/{len(rows)}" for k, n in cols.items()}, "valeurs_distinctes": distinct}
+
+
 # --------------------------------------------------------------- Géorisques
 GEO_ENDPOINTS = {
     "casias": "ssp/casias",
@@ -476,10 +503,13 @@ def test_connection(source: str, code_insee: str = "59350", lat: float = 50.6329
                 data, full, st = _get(c, url, {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE})
                 rows = parse_cartofriches(data)
                 recs, warns = cartofriches_records(rows)
-                res.update(url=full, http_status=st, apercu_brut=json.dumps(data, ensure_ascii=False)[:1500],
+                res.update(url=full, http_status=st, apercu_brut=json.dumps(data, ensure_ascii=False)[:3000],
                            resultat={"friches_page_1": len(rows), "friches_exploitables": len(recs),
                                      "page_suivante": bool(isinstance(data, dict) and data.get("next")),
-                                     "exemple": recs[0].values if recs else None, "avertissements": warns[:5]})
+                                     "avec_coordonnees": sum(1 for r in recs if r.has("lat") and r.has("lon")),
+                                     "exemple_interprete": recs[0].values if recs else None,
+                                     "avertissements": warns[:5]},
+                           champs=field_report(rows))
             elif source == "georisques":
                 base = (base_url or GEORISQUES_URL).rstrip("/")
                 counts, errs, raw, last = {}, {}, {}, (None, None)

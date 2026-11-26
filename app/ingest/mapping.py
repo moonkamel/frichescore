@@ -59,6 +59,9 @@ ENUM_SYNONYMS = {
     "deficit_equipements": {"eleve": "fort"},
 }
 
+# Colonnes secondaires : utilisées seulement si la colonne principale de même sens est absente
+SECONDARY = {"unite_fonciere_surface", "x", "y", "type"}
+
 CONFIANCES = {"eleve": "eleve", "elevee": "eleve", "haute": "eleve", "moyen": "moyen", "moyenne": "moyen",
               "faible": "faible", "basse": "faible"}
 TRUE = {"1", "true", "oui", "vrai", "yes", "o", "x", "y"}
@@ -207,6 +210,8 @@ def validate_row(row: dict, origine_label: str, default_date: str | None = None,
         key = resolve_column(col)
         if key is None:
             ignored.append(col)
+            continue
+        if norm(col) in SECONDARY and any(resolve_column(o) == key and norm(o) not in SECONDARY for o in cols):
             continue
         val, err, warn = parse_cell(key, raw)
         if err:

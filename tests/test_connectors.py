@@ -199,7 +199,8 @@ def test_nouvelle_tentative_apres_delai(mock):
 
 
 def test_adresse_cartofriches_alignee_sur_client_officiel():
-    assert K.CARTOFRICHES_URL.endswith("/cartofriches/friches") or "CARTOFRICHES_URL" in __import__("os").environ
+    # /geofriches : même contenu que /friches, avec la géométrie (le client officiel expose les deux)
+    assert K.CARTOFRICHES_URL.endswith("/cartofriches/geofriches") or "CARTOFRICHES_URL" in __import__("os").environ
 
 
 def test_diagnostic_reseau_dns_inconnu():
@@ -240,3 +241,13 @@ def test_contexte_tls_compact_reduit_le_clienthello():
 def test_transport_reel_utilise_contexte_tls(monkeypatch):
     monkeypatch.setattr(K, "TRANSPORT", None)
     assert isinstance(K._transport(), httpx.HTTPTransport)
+
+
+def test_surface_du_site_prioritaire_et_inventaire_des_champs():
+    rows = [{"site_id": "1", "unite_fonciere_surface": 9999, "site_surface": 1200, "site_type": "Friche X", "champ_inconnu": "a"},
+            {"site_id": "2", "site_surface": 800, "site_type": "Friche X", "champ_inconnu": "a"}]
+    recs, _ = K.cartofriches_records(rows)
+    assert recs[0].get("surface_m2") == 1200
+    rep = K.field_report(rows)
+    assert "champ_inconnu" in rep["colonnes_non_reconnues"] and rep["valeurs_distinctes"]["site_type"] == ["Friche X"]
+    assert rep["taux_remplissage"]["unite_fonciere_surface"] == "1/2"

@@ -1070,6 +1070,7 @@ async function renderDonnees() {
       $("#ct-out").innerHTML = `<div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
         ${r.diagnostic_reseau ? netDiag(r.diagnostic_reseau) : ""}
         ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
+        ${r.champs ? champsHtml(r.champs) : ""}
         ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;
     } catch (e) { $("#ct-out").innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
   };
@@ -1082,6 +1083,14 @@ async function renderDonnees() {
       S.meta = await api("/api/meta"); await loadSites(); renderSide();
     } catch (e) { $("#cf-out").textContent = "Erreur : " + e.message; }
   };
+}
+function champsHtml(c) {
+  if (!c.premiere_friche_brute) return "";
+  return `<details open style="margin-top:8px"><summary>Champs réellement renvoyés par l'API (${Object.keys(c.taux_remplissage).length})</summary>
+    <table class="fv" style="margin-top:6px"><thead><tr><th>Champ source</th><th>Interprété comme</th><th>Remplissage</th><th>Exemple (1re friche)</th><th>Valeurs distinctes</th></tr></thead><tbody>
+    ${Object.keys(c.taux_remplissage).map((k) => `<tr><td><code>${esc(k)}</code></td><td>${c.colonnes_reconnues[k] ? `<span class="chip ok">${esc(c.colonnes_reconnues[k])}</span>` : `<span class="chip warn">non reconnu</span>`}</td>
+      <td class="num">${esc(c.taux_remplissage[k])}</td><td>${esc(c.premiere_friche_brute[k] ?? "")}</td><td class="small">${esc((c.valeurs_distinctes[k] || []).join(" · "))}</td></tr>`).join("")}
+    </tbody></table></details>`;
 }
 function netDiag(d) {
   return `<div class="card" style="background:#fafbf9;margin:8px 0"><h4>Diagnostic réseau automatique — ${esc(d.hote || "")}</h4>
