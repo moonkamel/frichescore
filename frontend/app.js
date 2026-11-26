@@ -159,6 +159,39 @@ async function boot() {
   renderSide();
   await loadSites();
   setTab(location.hash.slice(1) || "classement");
+  $("#btn-jobs").onclick = () => setTab("donnees");
+  watchJobs();
+}
+
+/* --------------------------------------------- tâches de fond (suivi global) */
+async function watchJobs() {
+  clearTimeout(watchJobs._t);
+  let running = 0;
+  try {
+    const r = await api("/api/ingest/jobs");
+    S.jobs = r.taches;
+    running = r.taches.filter((j) => j.etat === "en_cours").length;
+    const b = $("#btn-jobs");
+    b.hidden = running === 0;
+    b.textContent = `⏳ ${running} tâche${running > 1 ? "s" : ""} en cours`;
+    const box = $("#jobs-box");
+    if (box) box.innerHTML = jobsHtml(r.taches);
+    if (watchJobs._wasRunning && running < watchJobs._wasRunning) { S.cache = {}; await loadSites(true); if (S.tab === "classement") renderClassement(); }
+    watchJobs._wasRunning = running;
+  } catch (e) { /* serveur indisponible : on réessaie plus tard */ }
+  watchJobs._t = setTimeout(watchJobs, running ? 2000 : 15000);
+}
+function jobsHtml(jobs) {
+  const recent = jobs.filter((j) => j.etat === "en_cours" || Date.now() / 1000 - j.debut < 6 * 3600);
+  if (!recent.length) return `<div class="small muted">Aucune tâche récente.</div>`;
+  return recent.map((j) => {
+    const pct = j.total ? Math.round((100 * j.fait) / j.total) : 0;
+    const when = new Date(j.debut * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const st = j.etat === "en_cours" ? `<span class="status fragile">en cours</span>` : j.etat === "termine" ? `<span class="status stable">terminée</span>` : `<span class="status effondre">erreur</span>`;
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--line-2)"><div class="row" style="justify-content:space-between"><b style="flex:1">${esc(j.libelle || "Tâche")}</b><span class="small muted" style="flex:0;white-space:nowrap">lancée à ${when}${j.duree_s != null ? ` · ${j.duree_s} s` : ""}</span> ${st}</div>
+      ${j.etat === "en_cours" ? `<div class="small">${esc(j.etape || "")} ${j.total ? `— ${j.fait} / ${j.total}` : ""}</div><div class="bar" style="height:8px;max-width:520px;margin-top:4px"><i style="width:${pct}%;background:var(--accent)"></i></div>` : ""}
+      ${j.etat === "erreur" ? `<div class="small delta-neg">${esc(j.erreur || "")}</div>` : ""}</div>`;
+  }).join("");
 }
 async function loadSites(silent) {
   // silent : recharge les données sans effacer la page affichée (ex. compte rendu d'import)
@@ -1084,6 +1117,7 @@ async function renderPortfolio() {
 async function renderDonnees() {
   const m = S.meta;
   $("#main").innerHTML = `<div class="section-head"><div><h2>Données & méthode</h2><p>Sources chargées, import de vos propres données et règles de calcul du FricheScore.</p></div></div>
+  <div class="card"><h3>Tâches de fond</h3><p class="small muted" style="margin:4px 0 6px">Imports et mises à jour tournent sur le serveur : vous pouvez quitter la page ou fermer le navigateur, leur avancement s'affiche ici à votre retour.</p><div id="jobs-box">${jobsHtml(S.jobs || [])}</div></div>
   <div class="grid2">
     <div class="card"><h3>Données chargées</h3><table style="margin-top:6px"><tbody>${m.perimeters.origines.map((o) => `<tr><td>${esc(o.origine)}</td><td class="num">${o.n} friches</td><td><button class="btn sm sec" data-delorig="${esc(o.origine)}">Retirer</button></td></tr>`).join("")}</tbody></table>
       <button class="btn sec sm" id="reset-demo" style="margin-top:10px">Réinitialiser le jeu de démonstration</button>
@@ -1216,6 +1250,7 @@ async function renderDonnees() {
   };
 }
 async function pollJob(job, out) {
+  watchJobs();
   let st = job;
   while (st.etat === "en_cours") {
     const pct = st.total ? Math.round((100 * st.fait) / st.total) : 0;

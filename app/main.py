@@ -269,15 +269,18 @@ class CartoReq(BaseModel):
 _JOBS: dict[str, dict] = {}
 
 
-def _start_job(fn) -> dict:
+def _start_job(fn, libelle: str = "Tâche") -> dict:
     """Exécute `fn(progress)` en tâche de fond ; suivi via GET /api/ingest/jobs/{id}."""
     import threading
     import time as _t
     import uuid
     jid = uuid.uuid4().hex[:12]
-    job = {"id": jid, "etat": "en_cours", "etape": "Démarrage", "fait": 0, "total": 0, "rapport": None,
+    job = {"id": jid, "libelle": libelle, "etat": "en_cours", "etape": "Démarrage", "fait": 0, "total": 0, "rapport": None,
            "erreur": None, "debut": _t.time(), "duree_s": None}
     _JOBS[jid] = job
+    for old in sorted(_JOBS, key=lambda k: _JOBS[k]["debut"])[:-50]:  # on garde les 50 dernières tâches
+        if _JOBS[old]["etat"] != "en_cours":
+            _JOBS.pop(old, None)
 
     def prog(etape, fait, total):
         job.update(etape=etape, fait=fait, total=total)
@@ -300,7 +303,8 @@ def ingest_cartofriches(r: CartoReq):
     codes = [c.strip() for c in r.codes_insee if c.strip()]
     if not codes:
         raise HTTPException(400, "aucun code INSEE")
-    return _start_job(lambda prog: service.ingest_cartofriches(codes, r.georisques, r.dvf, prog, r.communes, r.sites))
+    return _start_job(lambda prog: service.ingest_cartofriches(codes, r.georisques, r.dvf, prog, r.communes, r.sites),
+                      f"Import de périmètre ({', '.join(codes[:6])}{'…' if len(codes) > 6 else ''})")
 
 
 class SitesReq(BaseModel):
@@ -311,7 +315,7 @@ class SitesReq(BaseModel):
 @app.post("/api/enrichir/sites")
 def sites_enrich(r: SitesReq):
     """Indicateurs de site (gare, transports, ensoleillement, risques) pour les friches réelles."""
-    return _start_job(lambda prog: service.enrich_sites(r.ids or None, r.adresse, prog))
+    return _start_job(lambda prog: service.enrich_sites(r.ids or None, r.adresse, prog), "Indicateurs de site")
 
 
 # ---------------------------------------------------------- extraction IA
@@ -334,7 +338,7 @@ async def ia_upload(sid: str, file: UploadFile = File(...), consentement: bool =
         raise HTTPException(404, "site introuvable")
     except IAError as e:
         raise HTTPException(422, str(e))
-    job = _start_job(run)
+    job = _start_job(run, f"Analyse IA : {file.filename or 'document'}")
     return {**job, "extraction": eid}
 
 
@@ -379,7 +383,14 @@ class CommunesReq(BaseModel):
 def communes_enrich(r: CommunesReq):
     """Met à jour les indicateurs communaux réels (toutes les communes portant des friches réelles par défaut)."""
     codes = [c.strip() for c in (r.codes_insee or []) if c.strip()] or None
-    return _start_job(lambda prog: service.enrich_communes(codes, prog, r.rafraichir))
+    return _start_job(lambda prog: service.enrich_communes(codes, prog, r.rafraichir), "Indicateurs communaux")
+
+
+@app.get("/api/ingest/jobs")
+def ingest_jobs():
+    """Tâches de fond : en cours, puis terminées (les plus récentes d'abord)."""
+    jobs = sorted(_JOBS.values(), key=lambda j: (j["etat"] != "en_cours", -j["debut"]))
+    return {"taches": [{k: v for k, v in j.items() if k != "rapport"} | {"a_un_rapport": j["rapport"] is not None} for j in jobs[:20]]}
 
 
 @app.get("/api/ingest/jobs/{jid}")

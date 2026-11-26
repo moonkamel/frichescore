@@ -214,3 +214,12 @@ def test_route_enrichissement_sites_accessible(c, monkeypatch):
     monkeypatch.setattr(service, "enrich_sites", lambda ids=None, adresse=True, progress=None: {"sites": 0, "indicateurs": {}, "erreurs": []})
     r = c.post("/api/enrichir/sites", json={})
     assert r.status_code == 200 and "id" in r.json()
+
+
+def test_liste_des_taches(c, monkeypatch):
+    from app import service
+    monkeypatch.setattr(service, "enrich_communes", lambda codes=None, progress=None, refresh=False: {"communes": 0, "indicateurs": {}, "erreurs": []})
+    j = c.post("/api/communes/enrichir", json={}).json()
+    taches = c.get("/api/ingest/jobs").json()["taches"]
+    t = next(x for x in taches if x["id"] == j["id"])
+    assert t["libelle"] == "Indicateurs communaux" and "rapport" not in t
