@@ -135,10 +135,10 @@ def dido_params(url: str) -> tuple[str, dict, dict]:
     walk(meta)
     if not mills:
         raise K.ConnectorError("API DiDo : aucun millésime trouvé dans les métadonnées du fichier", f"{base}/datafiles/{rid}")
-    mil = max(mills)
+    ordered = sorted(set(mills), reverse=True)
     return (f"{base}/datafiles/{rid}/csv",
-            {"millesime": mil, "withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false"},
-            {"millesime": mil, "millesimes_disponibles": sorted(set(mills))[-6:]})
+            {"millesime": ordered[0], "withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false"},
+            {"millesime": ordered[0], "millesimes_disponibles": ordered[:6]})
 
 
 def _download(url: str, dest: Path, params: dict | None = None) -> None:
@@ -171,10 +171,27 @@ def cached_file(name: str, refresh: bool = False) -> tuple[Path, dict]:
     ext = ".zip" if info["url"].lower().split("?")[0].endswith(".zip") or _norm(info.get("format")) == "zip" else ".csv"
     path = d / f"{name}{ext}"
     url, params, extra = dido_params(info["url"])
-    info.update(extra)
-    if extra.get("millesime"):
+    if extra.get("millesimes_disponibles"):
+        # Le millésime le plus récent peut être annoncé avant d'être publié (« pas disponible avant … ») :
+        # on essaie les plus récents, du plus neuf au plus ancien.
+        last_err = None
+        for mil in extra["millesimes_disponibles"][:4]:
+            try:
+                _download(url, path, {**params, "millesime": mil})
+                extra["millesime"] = mil
+                last_err = None
+                break
+            except K.ConnectorError as e:
+                last_err = e
+                extra.setdefault("millesimes_ignores", []).append(f"{mil} : {e.message[:120]}")
+                if e.status not in (400, 404, 409, 425):
+                    break
+        if last_err:
+            raise last_err
+        info.update(extra)
         info["date"] = extra["millesime"]
-    _download(url, path, params)
+    else:
+        _download(url, path, params)
     meta = {**info, "fichier": path.name, "telecharge_le": date.today().isoformat(), "telecharge_le_ts": time.time(),
             "version": CACHE_VERSION}
     meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -292,41 +309,45 @@ def parse_lovac(path: Path, codes: set[str]) -> tuple[dict, dict]:
     vac = [h for h in headers if "vacant" in nh[h] and "taux" not in nh[h] and not longue.search(nh[h])]
     tot = [h for h in headers if ("total" in nh[h] or "parc" in nh[h]) and "vac" not in nh[h]]
     rate_col = max(rate, key=year) if rate else None
-    vac_col = max(vac, key=year) if vac else None
-    tot_col = None
-    if vac_col:
-        same = [h for h in tot if year(h) == year(vac_col)]
-        tot_col = same[0] if same else (max(tot, key=year) if tot else None)
+    # Couples (vacants, parc total) de MÊME année, du plus récent au plus ancien : le millésime le plus récent
+    # peut publier les vacants avant le parc total (constaté en 2026 : pp_vacant_26 sans ff_pp_total_26).
+    tot_by_year = {year(h): h for h in tot}
+    pairs = sorted(((year(v), v, tot_by_year[year(v)]) for v in vac if year(v) in tot_by_year), reverse=True)
+    if year_col and not pairs and vac and tot:  # format long : une seule colonne de chaque
+        pairs = [(0, vac[0], tot[0])]
     diag = {"colonnes": headers[:40], "colonne_code": code_col, "colonne_millesime": year_col, "colonne_taux": rate_col,
-            "colonne_vacants": vac_col, "colonne_total": tot_col, "lignes": len(rows)}
-    if not code_col or not (rate_col or (vac_col and tot_col)):
-        raise K.ConnectorError("colonnes non identifiées dans le fichier LOVAC (code commune, taux ou vacants/total) — "
+            "colonne_vacants": pairs[0][1] if pairs else None, "colonne_total": pairs[0][2] if pairs else None,
+            "lignes": len(rows)}
+    if not code_col or not (rate_col or pairs):
+        raise K.ConnectorError("colonnes non identifiées dans le fichier LOVAC (code commune, taux ou vacants/total de même année) — "
                                "le fichier retenu n'est peut-être pas celui des communes")
     best: dict[str, tuple] = {}
     for r in rows:
         c = _code(r.get(code_col))
         if c not in codes:
             continue
-        v = None
+        v, y = None, 0
         if rate_col:
             v = _num(r.get(rate_col))
             if v is not None and v <= 1:
                 v *= 100
-        if v is None and vac_col and tot_col:
-            a_, b_ = _num(r.get(vac_col)), _num(r.get(tot_col))
-            if a_ is not None and b_:
-                v = 100 * a_ / b_
+            y = year(rate_col)
+        if v is None:
+            for py, vc, tc in pairs:  # repli : année précédente si la plus récente est sous secret statistique
+                a_, b_ = _num(r.get(vc)), _num(r.get(tc))
+                if a_ is not None and b_:
+                    v, y = 100 * a_ / b_, py
+                    break
         if v is None or not (0 <= v <= 60):
             continue
-        y = 0
         if year_col:
             m = re.search(r"(19|20)\d{2}", str(r.get(year_col) or ""))
-            y = int(m.group(0)) if m else 0
+            y = int(m.group(0)) if m else y
         if c not in best or y >= best[c][0]:
             best[c] = (y, round(v, 1))
     out = {c: v for c, (y, v) in best.items()}
     ys = {y for y, _v in best.values() if y}
-    diag["annee"] = max(ys) if ys else (year(rate_col or vac_col) or None)
+    diag["annee"] = max(ys) if ys else None
     return out, diag
 
 

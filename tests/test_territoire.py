@@ -186,3 +186,30 @@ def test_cache_d_une_ancienne_version_ignore(mock, tmp_path):
          else httpx.Response(200, text="CODGEO_25;Millésime;ff_pp_total;pp_vacant\n59350;2026;100;8\n"))
     _p, meta = T.cached_file("lovac")
     assert meta["titre"] == "Lovac_opendata_Communes.csv" and meta["version"] == T.CACHE_VERSION
+
+
+def test_lovac_format_reel_2026_annees_decalees(tmp_path):
+    """Format réel 2026 : pp_vacant_26 publié sans ff_pp_total_26 -> on prend 2025, jamais 2026/2025 mélangés."""
+    p = write(tmp_path, "l.csv", "CODGEO_26;LIBGEO_26;pp_vacant_26;pp_vacant_plus_2ans_26;ff_pp_total_25;pp_vacant_25;pp_vacant_plus_2ans_25;"
+                                 "ff_pp_total_24;pp_vacant_24;pp_vacant_plus_2ans_24;EPCI_26;DEP\n"
+                                 "59350;Lille;15000;3000;120000;9600;3000;118000;9000;2900;200093201;59\n"
+                                 "59512;Roubaix;s;s;40000;s;s;40000;5200;2000;200093201;59\n")
+    out, diag = T.parse_lovac(p, {"59350", "59512"})
+    assert diag["colonne_vacants"] == "pp_vacant_25" and diag["colonne_total"] == "ff_pp_total_25"
+    assert out == {"59350": 8.0, "59512": 13.0} and diag["annee"] == 2025  # Roubaix : repli sur 2024 (secret en 2025)
+
+
+def test_dido_millesime_pas_encore_publie(mock):
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv",
+                "url": "https://dido.test/dido/api/v1/datafiles/577a8a66-4157-4787-b00a-031b61afea61/csv"}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"millesimes": [{"millesime": "2026-10"}, {"millesime": "2026-11"}]})
+        if req.url.params["millesime"] == "2026-11":
+            return httpx.Response(400, json={"code": 400, "message": "Les données de ce millésime ne seront pas disponible avant 2026-11-27T07:45:00.000Z"})
+        return httpx.Response(200, text="DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n59;59350;2025-01;120\n")
+    mock(h)
+    _p, meta = T.cached_file("sitadel")
+    assert meta["millesime"] == "2026-10" and "2026-11" in meta["millesimes_ignores"][0]
