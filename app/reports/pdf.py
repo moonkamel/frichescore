@@ -25,13 +25,25 @@ from ..scoring.indicators import CATALOG, label
 from ..scoring.record import age_years
 
 FONT, FONT_B = "Helvetica", "Helvetica-Bold"
-for d in ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu"):
-    p = Path(d)
-    if (p / "DejaVuSans.ttf").exists():
-        pdfmetrics.registerFont(TTFont("DejaVu", str(p / "DejaVuSans.ttf")))
-        pdfmetrics.registerFont(TTFont("DejaVu-Bold", str(p / "DejaVuSans-Bold.ttf")))
-        FONT, FONT_B = "DejaVu", "DejaVu-Bold"
-        break
+_FONT_USED = None
+# Police Unicode : DejaVu (Linux / Docker) ou Arial (Windows), sinon Helvetica avec substitutions
+_FONT_CANDIDATES = [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/DejaVuSans.ttf", "C:/Windows/Fonts/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf"),
+]
+for reg, bold in _FONT_CANDIDATES:
+    if Path(reg).exists() and Path(bold).exists():
+        try:
+            pdfmetrics.registerFont(TTFont("UniSans", reg))
+            pdfmetrics.registerFont(TTFont("UniSans-Bold", bold))
+            FONT, FONT_B = "UniSans", "UniSans-Bold"
+            _FONT_USED = reg
+            break
+        except Exception:  # noqa: BLE001 — police illisible : on essaie la suivante
+            continue
 
 INK = colors.HexColor("#1c2733")
 MUTED = colors.HexColor("#5b6773")
@@ -54,8 +66,9 @@ ST = {
 def _esc(s) -> str:
     s = "" if s is None else str(s)
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    if FONT == "Helvetica":
-        for a, b in (("≈", "~"), ("≥", ">="), ("≤", "<="), ("→", "->"), ("−", "-"), ("✓", "v")):
+    if FONT == "Helvetica" or "dejavu" not in str(_FONT_USED).lower():
+        for a, b in (("≈", "~"), ("≥", ">="), ("≤", "<="), ("→", "->"), ("−", "-"), ("✓", "v"), ("⚠", "!"),
+                     ("⏱", ""), ("▲", "+"), ("▼", "-")):
             s = s.replace(a, b)
     return s
 

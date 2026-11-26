@@ -12,14 +12,14 @@ son **explication** et la **traçabilité** des données qui le fondent.
 docker compose up --build
 ```
 
-Puis ouvrir <http://localhost:8000>. Au premier lancement, un jeu de démonstration est chargé.
+Puis ouvrir <http://localhost:8010> (port par défaut, modifiable avec la variable `FRICHESCORE_PORT`). Au premier lancement, un jeu de démonstration est chargé.
 Les données (portfolio, saisies terrain, imports) sont conservées dans le volume Docker `frichescore-data`.
 
 Sans Docker :
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --port 8010
 ```
 
 Tests : `pytest` (34 tests : règles de scoring, API de bout en bout, parseurs des connecteurs).
