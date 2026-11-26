@@ -313,3 +313,42 @@ def test_sitadel_filtre_ignore_par_le_serveur(mock, monkeypatch):
     with pytest.raises(K.ConnectorError) as e:
         T.sitadel_values({"59350", "59512"})
     assert "filtre" in str(e.value.message) or "aucune ligne" in str(e.value.message)
+
+
+def test_sitadel_504_passager_puis_succes(mock, monkeypatch):
+    monkeypatch.setattr(T.time, "sleep", lambda s: None)
+    y = T.date.today().year - 1
+    calls = {"n": 0}
+
+    def csv_for(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(504, text="<html>Service indisponible</html>")
+        return httpx.Response(200, text=f"CODE_INSEE;ANNEE;LOG_AUT\n59350;{y};150\n")
+
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv", "url": DIDO_URL}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"millesimes": [{"millesime": "2026-10"}], "columns": [{"name": "CODE_INSEE"}, {"name": "ANNEE"}, {"name": "LOG_AUT"}]})
+        return csv_for(req)
+    mock(h)
+    out, diag = T.sitadel_values({"59350"})
+    assert out == {"59350": 150.0} and calls["n"] == 2
+
+
+def test_sitadel_504_persistant_message_clair(mock, monkeypatch):
+    monkeypatch.setattr(T.time, "sleep", lambda s: None)
+
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv", "url": DIDO_URL}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"millesimes": [{"millesime": "2026-10"}], "columns": [{"name": "CODE_INSEE"}, {"name": "ANNEE"}, {"name": "LOG_AUT"}]})
+        return httpx.Response(504, text="<html>Service indisponible</html>")
+    mock(h)
+    with pytest.raises(K.ConnectorError) as e:
+        T.sitadel_values({"59350"})
+    assert "serveur DiDo" in e.value.message and "réessayer plus tard" in e.value.message

@@ -439,6 +439,7 @@ def dido_info(url: str) -> dict:
 
 
 MAX_FILTERED_BYTES = 30 * 1024 * 1024
+RETRY_PAUSES = (0, 5, 15)  # secondes avant chaque tentative après une erreur 502/503/504
 
 
 def _stream_text(url: str, params: dict, max_bytes: int | None = None, head_only: bool = False) -> tuple[str, str]:
@@ -543,12 +544,26 @@ def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tu
                 vals = sorted(mapping)
                 q = dict(p_)
                 q[col] = ("in:" + ",".join(vals)) if len(vals) > 1 else f"eq:{vals[0]}"
-                try:
-                    txt, full = _stream_text(url, q, max_bytes=MAX_FILTERED_BYTES)
-                except K.ConnectorError as e:
-                    errs.append(f"{mil} {col}={q[col][:40]} : {e.message[:140]}")
-                    if e.status not in (400, 404, 409, 425):
-                        raise
+                txt = None
+                for attempt, pause in enumerate(RETRY_PAUSES):
+                    try:
+                        txt, full = _stream_text(url, q, max_bytes=MAX_FILTERED_BYTES)
+                        break
+                    except K.ConnectorError as e:
+                        msg = e.message if e.status not in (502, 503, 504) else f"HTTP {e.status} (serveur DiDo surchargé ou indisponible)"
+                        errs.append(f"{mil} {col}={q[col][:40]} : {msg[:140]}")
+                        if e.status in (502, 503, 504) and attempt < len(RETRY_PAUSES) - 1:
+                            time.sleep(pause)  # erreur passagère côté serveur : nouvelle tentative
+                            continue
+                        if e.status in (502, 503, 504):
+                            raise K.ConnectorError(
+                                f"le serveur DiDo du SDES n'a pas répondu à temps (HTTP {e.status}, {len(RETRY_PAUSES)} tentatives). "
+                                "Panne ou surcharge côté serveur, indépendante de FricheScore : réessayer plus tard. "
+                                "Les autres indicateurs ne sont pas affectés.", e.url, e.status)
+                        if e.status not in (400, 404, 409, 425):
+                            raise
+                        break
+                if txt is None:
                     continue
                 rd = list(csv.DictReader(io.StringIO(txt.lstrip("\ufeff")), delimiter=";" if txt.count(";") >= txt.count(",") else ","))
                 if rd:
