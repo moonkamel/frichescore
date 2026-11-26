@@ -263,6 +263,7 @@ class CartoReq(BaseModel):
     georisques: bool = True
     dvf: bool = True
     communes: bool = True
+    sites: bool = True
 
 
 _JOBS: dict[str, dict] = {}
@@ -299,7 +300,18 @@ def ingest_cartofriches(r: CartoReq):
     codes = [c.strip() for c in r.codes_insee if c.strip()]
     if not codes:
         raise HTTPException(400, "aucun code INSEE")
-    return _start_job(lambda prog: service.ingest_cartofriches(codes, r.georisques, r.dvf, prog, r.communes))
+    return _start_job(lambda prog: service.ingest_cartofriches(codes, r.georisques, r.dvf, prog, r.communes, r.sites))
+
+
+class SitesReq(BaseModel):
+    ids: list[str] | None = None
+    adresse: bool = True
+
+
+@app.post("/api/enrichir/sites")
+def sites_enrich(r: SitesReq):
+    """Indicateurs de site (gare, transports, ensoleillement, risques) pour les friches réelles."""
+    return _start_job(lambda prog: service.enrich_sites(r.ids or None, r.adresse, prog))
 
 
 class CommunesReq(BaseModel):
@@ -332,8 +344,11 @@ class ConnTestReq(BaseModel):
 
 @app.post("/api/connecteurs/test")
 def connector_test(r: ConnTestReq):
-    if r.source not in ("cartofriches", "georisques", "dvf", "communes"):
-        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf, communes)")
+    if r.source not in ("cartofriches", "georisques", "dvf", "communes", "sites"):
+        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf, communes, sites)")
+    if r.source == "sites":
+        from .ingest import site as S_
+        return S_.test_site(r.lat, r.lon, r.code_insee.strip())
     if r.source == "communes":
         from .ingest import territoire
         return territoire.test_communes(r.code_insee.strip())

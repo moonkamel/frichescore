@@ -52,6 +52,7 @@ FRICTION_LBL = {
     "seveso": "Ancien site SEVESO", "proprietaires_plus_de_5": "Plus de 5 propriétaires",
     "proprietaires_3_a_5": "3 à 5 propriétaires", "proprietaires_inconnus": "Propriété inconnue",
     "extension_zan": "Site en extension : justification ZAN",
+    "risque_inondation_sans_ppri": "Risque d'inondation recensé, zonage PPRi à vérifier",
 }
 
 
@@ -69,6 +70,8 @@ def _schema() -> list[dict]:
     add("COST.foncier_multi_proprio_m2", g, "Surcoût de maîtrise foncière (≥ 3 propriétaires)", RANGE, "€/m² de terrain")
     add("COST.raccordement_pv_eur_km", g, "Raccordement photovoltaïque", RANGE, "€/km jusqu'au poste source")
     add("COST.extension_reseaux_m2", g, "Extension des réseaux (site en extension)", RANGE, "€/m² de terrain")
+    add("COST.fondations_argiles_fort_m2", g, "Fondations adaptées — aléa argiles fort", RANGE, "€/m² de terrain",
+        "Usages bâtis ; moitié pour un aléa moyen")
     g = "Viabilisation / VRD par usage"
     for u in C.COST["viabilisation"]:
         add(f"COST.viabilisation.{u}", g, USAGE_LBL[u], RANGE, "€/m² de terrain")

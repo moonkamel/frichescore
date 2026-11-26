@@ -116,6 +116,12 @@ def compute_cost(t: Tracker, usage: str, hyp: dict | None = None) -> dict:
     # ----------------------------------------------------------- viabilisation
     v_lo, v_hi = C.COST["viabilisation"][usage]
     add("Viabilisation / VRD", surf * v_lo, surf * v_hi, None, "viabilisation")
+    alea = t.rec.get("alea_argiles")
+    if alea in ("fort", "moyen") and usage in ("logement", "tertiaire", "equipement", "activite"):
+        a_lo, a_hi = C.COST["fondations_argiles_fort_m2"]
+        k = 1.0 if alea == "fort" else 0.5
+        add(f"Fondations adaptées (aléa retrait-gonflement des argiles {alea})", surf * a_lo * k, surf * a_hi * k,
+            "alea_argiles", "viabilisation")
     if t.rec.get("site_extension"):
         e_lo, e_hi = C.COST["extension_reseaux_m2"]
         add("Extension des réseaux (site en extension urbaine)", surf * e_lo, surf * e_hi, "site_extension", "viabilisation")

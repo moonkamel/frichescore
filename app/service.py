@@ -536,8 +536,24 @@ def enrich_communes(codes: list[str] | None = None, progress=None, refresh: bool
     return rep
 
 
+def enrich_sites(ids: list[str] | None = None, adresse: bool = True, progress=None) -> dict:
+    """Indicateurs de site (gare, transports collectifs, ensoleillement, risques) pour les friches données,
+    ou pour toutes les friches réelles."""
+    from .ingest import site as S_
+    ids = ids or db.real_friche_ids()
+    if not ids:
+        return {"sites": 0, "indicateurs": {}, "sources": {},
+                "erreurs": ["Aucune friche réelle dans la base : importez d'abord un périmètre ou un fichier CSV."]}
+    sites = db.load_sites({"type": "ids", "values": ids})
+    vals, rep = S_.enrich_sites(list(sites.values()), adresse, progress)
+    for sid, v in vals.items():
+        if v:
+            db.update_friche_values(sid, v)
+    return rep
+
+
 def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True, progress=None,
-                        communes: bool = True) -> dict:
+                        communes: bool = True, sites: bool = True) -> dict:
     """Import d'un périmètre. `progress(etape, fait, total)` est appelé au fil de l'eau.
     Les bases Géorisques sont interrogées en parallèle (6 friches à la fois)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -593,5 +609,9 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
         found = sorted({r.get("code_insee") for r in all_recs if r.get("code_insee")})
         rep = enrich_communes(found, progress)
         report["indicateurs_communaux"] = rep["indicateurs"]
+        report["erreurs"] += rep["erreurs"]
+    if sites and all_recs:
+        rep = enrich_sites([r.get("id") for r in all_recs], True, progress)
+        report["indicateurs_sites"] = rep["indicateurs"]
         report["erreurs"] += rep["erreurs"]
     return report

@@ -192,6 +192,24 @@ def update_friche_epci(code_insee: str, epci: str):
             c.execute("UPDATE friches SET epci = ?, data = ? WHERE id = ?", (epci, json.dumps(d, ensure_ascii=False), r["id"]))
 
 
+def update_friche_values(fid: str, values: dict) -> None:
+    """Ajoute/écrase des indicateurs calculés sur une friche ({clé: (valeur, Provenance)}), origine conservée."""
+    with conn() as c:
+        r = c.execute("SELECT data FROM friches WHERE id = ?", (fid,)).fetchone()
+        if r is None:
+            return
+        d = json.loads(r["data"])
+        for k, (v, p) in values.items():
+            d["values"][k] = v
+            d.setdefault("prov", {})[k] = p.to_dict()
+        c.execute("UPDATE friches SET data = ? WHERE id = ?", (json.dumps(d, ensure_ascii=False), fid))
+
+
+def real_friche_ids() -> list[str]:
+    with conn() as c:
+        return [r[0] for r in c.execute("SELECT id FROM friches WHERE origine NOT LIKE 'demo%'")]
+
+
 def real_friche_communes() -> list[str]:
     with conn() as c:
         return [r[0] for r in c.execute("SELECT DISTINCT code_insee FROM friches WHERE origine NOT LIKE 'demo%' AND code_insee IS NOT NULL")]

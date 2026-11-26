@@ -136,6 +136,17 @@ def dido_params(url: str) -> tuple[str, dict, dict]:
     if not mills:
         raise K.ConnectorError("API DiDo : aucun millésime trouvé dans les métadonnées du fichier", f"{base}/datafiles/{rid}")
     ordered = sorted(set(mills), reverse=True)
+    # Les métadonnées peuvent ne lister que le millésime annoncé (pas encore publié) : on ajoute les
+    # mois précédents comme solutions de repli (format AAAA-MM).
+    m2 = re.fullmatch(r"(\d{4})-(\d{2})", ordered[0])
+    if m2:
+        y, mo = int(m2.group(1)), int(m2.group(2))
+        for _ in range(3):
+            y, mo = (y, mo - 1) if mo > 1 else (y - 1, 12)
+            cand = f"{y}-{mo:02d}"
+            if cand not in ordered:
+                ordered.append(cand)
+        ordered = sorted(set(ordered), reverse=True)
     return (f"{base}/datafiles/{rid}/csv",
             {"millesime": ordered[0], "withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false"},
             {"millesime": ordered[0], "millesimes_disponibles": ordered[:6]})

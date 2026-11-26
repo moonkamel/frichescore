@@ -143,7 +143,7 @@ def test_import_perimetre_en_tache_de_fond(c, monkeypatch):
     monkeypatch.setattr(K, "fetch_cartofriches", fake_fetch)
     monkeypatch.setattr(K, "enrich_georisques", fake_geo)
     monkeypatch.setattr(K, "fetch_dvf", lambda code, years, base_url=None: ({"prix_m2_logement": 3500, "_annees": [2024]}, []))
-    job = c.post("/api/ingest/cartofriches", json={"codes_insee": ["59350", "59512"]}).json()
+    job = c.post("/api/ingest/cartofriches", json={"codes_insee": ["59350", "59512"], "communes": False, "sites": False}).json()
     for _ in range(100):
         st = c.get(f"/api/ingest/jobs/{job['id']}").json()
         if st["etat"] != "en_cours":
@@ -186,3 +186,31 @@ def test_indicateurs_communaux_et_distance(c, monkeypatch):
     assert site.get("zonage_abc") == "B1" and site.get("epci") == "Métropole Européenne de Lille"
     assert 1.0 < site.get("distance_centre_km") < 1.5 and "mairie" in site.prov["distance_centre_km"].source
     assert db.load_sites({"type": "epci", "values": ["Métropole Européenne de Lille"]}).get("CF-COM-1") is not None
+
+
+def test_indicateurs_de_site_enregistres(c, monkeypatch):
+    from app import db, service
+    from app.ingest import site as SI
+    from app.scoring.record import Provenance, Record
+    r = Record()
+    p = Provenance("API Cartofriches (Cerema)", "2026-11-26", "moyen")
+    for k, v in {"id": "CF-SITE-1", "nom": "Réelle", "code_insee": "59350", "departement": "59", "surface_m2": 5000,
+                 "lat": 50.6166, "lon": 3.0745, "activite_passee": "BASIAS"}.items():
+        r.set(k, v, p)
+    db.upsert_friche(r, "cartofriches")
+    q = Provenance("OpenStreetMap", "2026-11-26", "moyen")
+    monkeypatch.setattr(SI, "enrich_sites", lambda recs, adresse=True, progress=None: (
+        {x.get("id"): {"desserte_tc": ("forte", q), "distance_gare_km": (2.2, q)} for x in recs},
+        {"sites": len(recs), "indicateurs": {"desserte_tc": len(recs)}, "erreurs": [], "sources": {}}))
+    rep = service.enrich_sites(["CF-SITE-1"])
+    assert rep["sites"] == 1
+    s = db.load_sites({"type": "ids", "values": ["CF-SITE-1"]})["CF-SITE-1"]
+    assert s.get("desserte_tc") == "forte" and s.prov["desserte_tc"].source == "OpenStreetMap" and s.get("_origine") == "cartofriches"
+
+
+def test_route_enrichissement_sites_accessible(c, monkeypatch):
+    """Régression : /api/sites/enrichir était capturée par /api/sites/{sid}."""
+    from app import service
+    monkeypatch.setattr(service, "enrich_sites", lambda ids=None, adresse=True, progress=None: {"sites": 0, "indicateurs": {}, "erreurs": []})
+    r = c.post("/api/enrichir/sites", json={})
+    assert r.status_code == 200 and "id" in r.json()

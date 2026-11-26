@@ -1015,7 +1015,7 @@ async function renderDonnees() {
   <div class="card"><h3>Connecteurs Cartofriches · Géorisques · DVF</h3>
     <p class="small muted">Les connecteurs interrogent les API publiques depuis la machine qui exécute FricheScore. Commencez par <b>tester la connexion</b> : l'appel est réel et le résultat brut (ou l'erreur exacte) s'affiche. En cas d'échec, l'outil n'invente aucune donnée.</p>
     <div class="grid3" style="align-items:end">
-      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option><option value="communes">Indicateurs communaux (API Géo, zonage ABC, LOVAC, SITADEL, ENAF)</option></select></div>
+      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option><option value="communes">Indicateurs communaux (API Géo, zonage ABC, LOVAC, SITADEL, ENAF)</option><option value="sites">Indicateurs de site (gares SNCF, transports OSM, PVGIS, risques Géorisques)</option></select></div>
       <div><label class="small muted">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
       <div class="row"><div><label class="small muted">Latitude</label><input type="number" id="ct-lat" value="50.6329" step="any"></div><div><label class="small muted">Longitude</label><input type="number" id="ct-lon" value="3.0586" step="any"></div></div>
       <div style="grid-column:1 / 3"><label class="small muted">Adresse de l'API (modifiable si elle a changé)</label><input type="text" id="ct-url"></div>
@@ -1027,13 +1027,20 @@ async function renderDonnees() {
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-geo" checked> Géorisques</label>
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-dvf" checked> DVF</label>
       <label class="toggle" style="flex:0;white-space:nowrap" title="Population, zonage ABC, vacance, permis de construire, consommation d'espaces"><input type="checkbox" id="cf-com" checked> Indicateurs communaux</label>
+      <label class="toggle" style="flex:0;white-space:nowrap" title="Gare, transports collectifs, ensoleillement, risques naturels (≈ 1 s par friche)"><input type="checkbox" id="cf-site" checked> Indicateurs de site</label>
       <button class="btn" id="cf-go" style="flex:0;white-space:nowrap">Importer</button></div>
     <div id="cf-out" class="small" style="margin-top:6px"></div>
     <h4 style="margin-top:16px">Indicateurs communaux des friches réelles</h4>
     <p class="small muted" style="margin:4px 0 6px">Population et mairie (API Géo), zonage ABC, vacance des logements (LOVAC), logements autorisés (SITADEL) et consommation d'espaces (Cerema). Les fichiers nationaux sont téléchargés une fois puis gardés en cache 30 jours. À relancer après un import CSV ou pour rafraîchir les données.</p>
     <div class="row" style="justify-content:flex-start"><button class="btn sec" id="com-go" style="flex:0;white-space:nowrap">Mettre à jour les indicateurs communaux</button>
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="com-refresh"> retélécharger les fichiers nationaux</label></div>
-    <div id="com-out" class="small" style="margin-top:6px"></div></div>
+    <div id="com-out" class="small" style="margin-top:6px"></div>
+    <h4 style="margin-top:16px">Indicateurs de site des friches réelles</h4>
+    <p class="small muted" style="margin:4px 0 6px">Gare la plus proche (SNCF), desserte en transports collectifs (arrêts OpenStreetMap à moins de 400 m, modes lourds à moins de 600 m), ensoleillement (PVGIS), risque d'inondation et aléa argiles (Géorisques). Le rapport de risques à l'adresse est limité à 1 appel par seconde : comptez environ 1 s par friche.</p>
+    <div class="row" style="justify-content:flex-start"><button class="btn sec" id="site-go" style="flex:0;white-space:nowrap">Mettre à jour les indicateurs de site</button>
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="site-adr" checked> risques à l'adresse (sinon : risques de la commune, plus rapide)</label></div>
+    <div id="site-out" class="small" style="margin-top:6px"></div>
+    <p class="small muted" style="margin-top:6px">Arrêts de transport : © contributeurs OpenStreetMap, licence ODbL.</p></div>
   <div class="card doc"><h3>Méthode</h3>
     <p>Chaque friche reçoit une note de 0 à 100 sur cinq dimensions, calculées <b>séparément pour chaque usage</b> (${Object.values(m.usages).join(", ").toLowerCase()}).</p>
     <ul>
@@ -1067,9 +1074,11 @@ async function renderDonnees() {
   };
   $("#imp-check").onclick = () => doImport(true);
   bindCommunes();
+  bindSites();
   $("#imp-go").onclick = () => doImport(false);
   const urls = await api("/api/connecteurs").catch(() => ({}));
   urls.communes = "API Géo · data.gouv.fr · Cerema (adresses résolues automatiquement)";
+  urls.sites = "SNCF open data · Overpass (OpenStreetMap) · PVGIS · Géorisques — point testé : latitude / longitude ci-contre";
   const setUrl = () => { $("#ct-url").value = urls[$("#ct-src").value] || ""; };
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {
@@ -1099,7 +1108,7 @@ async function renderDonnees() {
     $("#cf-go").disabled = true;
     const out = $("#cf-out");
     try {
-      const job = await api("/api/ingest/cartofriches", { codes_insee: codes, georisques: $("#cf-geo").checked, dvf: $("#cf-dvf").checked, communes: $("#cf-com").checked });
+      const job = await api("/api/ingest/cartofriches", { codes_insee: codes, georisques: $("#cf-geo").checked, dvf: $("#cf-dvf").checked, communes: $("#cf-com").checked, sites: $("#cf-site").checked });
       let st = job;
       while (st.etat === "en_cours") {
         const pct = st.total ? Math.round((100 * st.fait) / st.total) : 0;
@@ -1114,7 +1123,7 @@ async function renderDonnees() {
         const r = st.rapport;
         S.meta = await api("/api/meta"); await loadSites(true); renderSide();
         const o = $("#cf-out") || out;
-        o.innerHTML = `<div class="alert info"><b>${r.importees} friche(s) importée(s)</b> en ${st.duree_s} s, ${r.communes_dvf} commune(s) enrichie(s) avec DVF.${r.indicateurs_communaux ? " Indicateurs communaux : " + esc(Object.entries(r.indicateurs_communaux).map(([k, n]) => `${catLabel(k)} (${n})`).join(", ")) + "." : ""} Elles sont visibles dans l'onglet Classement.</div>${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 30).map(esc).join("<br>")}${r.erreurs.length > 30 ? `<br>… et ${r.erreurs.length - 30} autre(s)` : ""}</div>` : ""}${r.avertissements.length ? `<div class="alert">${r.avertissements.slice(0, 10).map(esc).join("<br>")}</div>` : ""}`;
+        o.innerHTML = `<div class="alert info"><b>${r.importees} friche(s) importée(s)</b> en ${st.duree_s} s, ${r.communes_dvf} commune(s) enrichie(s) avec DVF.${r.indicateurs_communaux ? " Indicateurs communaux : " + esc(Object.entries(r.indicateurs_communaux).map(([k, n]) => `${catLabel(k)} (${n})`).join(", ")) + "." : ""}${r.indicateurs_sites ? " Indicateurs de site : " + esc(Object.entries(r.indicateurs_sites).map(([k, n]) => `${catLabel(k)} (${n})`).join(", ")) + "." : ""} Elles sont visibles dans l'onglet Classement.</div>${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 30).map(esc).join("<br>")}${r.erreurs.length > 30 ? `<br>… et ${r.erreurs.length - 30} autre(s)` : ""}</div>` : ""}${r.avertissements.length ? `<div class="alert">${r.avertissements.slice(0, 10).map(esc).join("<br>")}</div>` : ""}`;
         toast(`Import terminé : ${r.importees} friche(s).`, 5000);
       } else if (st.etat === "erreur") {
         out.innerHTML = `<div class="alert bad">L'import a échoué : ${esc(st.erreur)}</div>`;
@@ -1133,6 +1142,23 @@ async function pollJob(job, out) {
     st = await api(`/api/ingest/jobs/${job.id}`);
   }
   return st;
+}
+function bindSites() {
+  const b = $("#site-go"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true;
+    const out = $("#site-out");
+    try {
+      const st = await pollJob(await api("/api/enrichir/sites", { adresse: $("#site-adr").checked }), out);
+      if (st.etat === "termine") {
+        const r = st.rapport;
+        S.meta = await api("/api/meta"); await loadSites(true); renderSide();
+        out.innerHTML = `<div class="alert info"><b>${r.sites} friche(s) mise(s) à jour</b> en ${st.duree_s} s. ${Object.entries(r.indicateurs).map(([k, n]) => `${esc(catLabel(k))} : ${n}`).join(" · ") || "Aucun indicateur obtenu."}</div>
+          ${r.erreurs.length ? `<details><summary class="small">${r.erreurs.length} message(s)</summary><div class="alert bad">${r.erreurs.slice(0, 40).map(esc).join("<br>")}</div></details>` : ""}`;
+      } else out.innerHTML = `<div class="alert bad">Échec : ${esc(st.erreur)}</div>`;
+    } catch (e) { out.innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
+    finally { b.disabled = false; }
+  };
 }
 function bindCommunes() {
   const b = $("#com-go"); if (!b) return;

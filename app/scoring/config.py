@@ -76,6 +76,7 @@ COST = {
     },
     "foncier_multi_proprio_m2": (5, 15),
     "extension_reseaux_m2": (15, 40),
+    "fondations_argiles_fort_m2": (5, 15),  # surcoût de fondations, aléa retrait-gonflement fort (usages bâtis)
 }
 
 # Friction réglementaire : (points de friction, mois de délai) par contrainte
@@ -109,6 +110,7 @@ FRICTION = {
     "proprietaires_3_a_5": (6, 6),
     "proprietaires_inconnus": (4, 3),
     "extension_zan": (12, 6),
+    "risque_inondation_sans_ppri": (6, 3),  # risque recensé par Géorisques, zonage du PPRi non renseigné
 }
 FRICTION_POINTS_PAR_MOIS_HYPOTHESE = 1.2  # contre-analyse : points de friction par mois de délai ajouté
 

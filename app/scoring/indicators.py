@@ -65,6 +65,9 @@ CATALOG: dict[str, tuple] = {
     "desserte_tc": ("Desserte transports collectifs", "enum", "GTFS / transport.data.gouv.fr", "moyen", ["forte", "moyenne", "faible"]),
     "distance_autoroute_km": ("Distance à un échangeur (km)", "float", "BD TOPO", "eleve", None),
     "distance_poste_source_km": ("Distance au poste source (km)", "float", "Enedis / Caparéseau", "moyen", None),
+    "nb_arrets_tc_400m": ("Arrêts de transport collectif à moins de 400 m", "int", "OpenStreetMap (Overpass)", "moyen", None),
+    "risque_inondation": ("Risque d'inondation recensé", "bool", "Géorisques (rapport de risques / GASPAR)", "moyen", None),
+    "alea_argiles": ("Aléa retrait-gonflement des argiles", "enum", "Géorisques", "eleve", ["faible", "moyen", "fort"]),
     "irradiation_kwh_m2": ("Irradiation (kWh/m²/an)", "float", "PVGIS (JRC)", "eleve", None),
     # Territoire / marché
     "population": ("Population communale", "int", "INSEE recensement", "eleve", None),

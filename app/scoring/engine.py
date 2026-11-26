@@ -191,6 +191,12 @@ def recommendations(rec: Record, ur: dict | None = None) -> list[dict]:
     if rec.get("projet_connu"):
         r.insert(0, {"priorite": "haute", "etude": "Contacter la collectivité : un projet est déjà identifié sur ce site",
                      "motif": "Statut Cartofriches « friche avec projet » — éviter d'étudier un site déjà engagé"})
+    if rec.get("risque_inondation") and not rec.has("ppri"):
+        r.append({"priorite": "moyenne", "etude": "Vérifier le zonage du PPRi (ou de l'atlas des zones inondables) sur le site",
+                  "motif": "Risque d'inondation recensé par Géorisques, zonage réglementaire non renseigné"})
+    if rec.get("alea_argiles") == "fort":
+        r.append({"priorite": "basse", "etude": "Étude géotechnique G1 (aléa retrait-gonflement des argiles fort)",
+                  "motif": "Aléa fort : fondations adaptées obligatoires pour une construction neuve"})
     if rec.get("ppri") in ("rouge", "bleu"):
         r.append({"priorite": "moyenne", "etude": "Consultation de la DDT(M) sur le règlement du PPRi",
                   "motif": f"Site en zone {rec.get('ppri')} du PPRi"})

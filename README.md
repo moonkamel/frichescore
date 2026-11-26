@@ -83,7 +83,11 @@ et doivent être calibrées sur vos propres opérations.
 | API Géo (geo.api.gouv.fr) | Population, EPCI, mairie → distance au centre de chaque friche | Connecteur API |
 | Zonage ABC, LOVAC (vacance), SITADEL (logements autorisés) — data.gouv.fr | Potentiel logement, marché | Fichiers nationaux résolus via l'API data.gouv.fr, mis en cache 30 jours |
 | Consommation d'ENAF 2011-2021 (Cerema, `/indicateurs/conso_espace`) | Impact ZAN | Connecteur API |
-| Cadastre / fichiers fonciers, PLU(i) (GPU), PVGIS… | Autres dimensions | Import CSV (une colonne par indicateur) |
+| Gares de voyageurs — SNCF open data | Distance à la gare de chaque friche | Export CSV, cache 90 jours (repli OpenStreetMap) |
+| Arrêts de transport — OpenStreetMap via Overpass (© contributeurs OSM, ODbL) | Desserte en transports collectifs | Une requête par commune |
+| PVGIS 5.3 (Commission européenne) | Ensoleillement (photovoltaïque) | API, carreaux de 0,1° |
+| Rapport de risques / GASPAR — Géorisques | Risque d'inondation, aléa argiles | API (1 appel/s), repli commune |
+| Cadastre / fichiers fonciers, PLU(i) (GPU)… | Autres dimensions | Import CSV (une colonne par indicateur) |
 
 ### Connecteurs
 
@@ -108,6 +112,15 @@ données, téléchargée une fois et mise en cache (`<dossier de la base>/cache/
 Les colonnes sont détectées de façon tolérante ; la source « Indicateurs communaux » du test de connexion montre le
 fichier retenu, les colonnes détectées et la valeur obtenue pour une commune. Une friche réelle n'hérite jamais
 d'indicateurs de démonstration.
+
+### Indicateurs de site
+
+Calculés à partir des coordonnées de chaque friche, à l'import d'un périmètre ou via **Données → Mettre à jour
+les indicateurs de site**. Desserte : *forte* si un métro, tram ou train est à moins de 600 m ou si au moins 8 arrêts
+sont à moins de 400 m ; *moyenne* à partir de 2 arrêts ; *faible* sinon. Le fichier national d'arrêts de
+transport.data.gouv.fr (~417 Mo, non dédoublonné) n'est pas utilisé : OpenStreetMap est interrogé commune par commune.
+Un risque d'inondation recensé sans zonage PPRi connu ajoute de la friction (zonage à vérifier) ; un aléa argiles fort
+ajoute un surcoût de fondations — deux paramètres réglables.
 
 ### Import CSV
 

@@ -213,3 +213,20 @@ def test_dido_millesime_pas_encore_publie(mock):
     mock(h)
     _p, meta = T.cached_file("sitadel")
     assert meta["millesime"] == "2026-10" and "2026-11" in meta["millesimes_ignores"][0]
+
+
+def test_dido_un_seul_millesime_annonce(mock):
+    """Cas réel : les métadonnées ne listent que 2026-11 (non publié) -> repli automatique sur 2026-10."""
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv",
+                "url": "https://dido.test/dido/api/v1/datafiles/577a8a66-4157-4787-b00a-031b61afea61/csv"}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"millesimes": [{"millesime": "2026-11"}]})
+        if req.url.params["millesime"] == "2026-11":
+            return httpx.Response(400, json={"message": "pas disponible avant 2026-11-27"})
+        return httpx.Response(200, text="DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n59;59350;2025-01;120\n")
+    mock(h)
+    _p, meta = T.cached_file("sitadel")
+    assert meta["millesime"] == "2026-10"

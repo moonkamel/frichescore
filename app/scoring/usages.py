@@ -218,6 +218,8 @@ def score_renaturation(t: Tracker) -> tuple[float, list[str]]:
     ppri = t.read("ppri", "non", 1)
     if ppri in ("rouge", "bleu"):
         s += t.add(f"Zone inondable ({ppri}) : intérêt comme champ d'expansion des crues", 12, "ppri")
+    elif t.rec.get("risque_inondation"):
+        s += t.add("Risque d'inondation recensé : intérêt possible comme champ d'expansion des crues", 6, "risque_inondation")
     if t.read("natura2000", False, 0.5) or t.read("znieff", False, 0.5):
         s += t.add("Continuité écologique (Natura 2000 / ZNIEFF)", 10, "znieff")
     ev = t.read("espaces_verts_m2_hab", 15, 1)

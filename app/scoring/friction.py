@@ -56,6 +56,8 @@ def compute_friction(t: Tracker, usage: str, hyp: dict | None = None) -> dict:
             f("Zone rouge du PPRi", "ppri_rouge", "ppri")
         elif ppri == "bleu":
             f("Zone bleue du PPRi (prescriptions)", "ppri_bleu", "ppri")
+    if usage != "renaturation" and t.rec.get("risque_inondation") and not t.rec.has("ppri"):
+        f("Risque d'inondation recensé (Géorisques) : zonage du PPRi à vérifier", "risque_inondation_sans_ppri", "risque_inondation")
     if t.read("pprt", False, 0.5) and usage != "renaturation":
         f("Périmètre de PPRT", "pprt", "pprt")
     if t.read("natura2000", False, 1):
