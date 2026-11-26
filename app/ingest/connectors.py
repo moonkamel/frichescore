@@ -374,6 +374,9 @@ def _derive_cartofriches(rec: Record, row: dict, today: str) -> None:
         rec.set("projet_connu", True, Provenance(src, today, "moyen", "statut « friche avec projet »"))
     elif "sans projet" in statut:
         rec.set("projet_connu", False, Provenance(src, today, "moyen", "statut « friche sans projet »"))
+    sn0 = str(row.get("source_nom") or "").lower()
+    if "fonds friches" in sn0 and not rec.has("projet_connu"):
+        rec.set("projet_connu", True, Provenance(src, today, "moyen", "lauréat de l'appel à projets Fonds Friches"))
     origine = " — ".join(str(row.get(k)) for k in ("source_nom", "nature") if row.get(k))
     if origine:
         rec.set("source_inventaire", origine, Provenance(src, today, "moyen"))
@@ -483,9 +486,23 @@ def _icpe_fields(items: list[dict], today: str) -> dict:
     return out
 
 
-def enrich_georisques(rec: Record, rayon_m: int = 150, base_url: str | None = None) -> tuple[Record, list[str]]:
+def search_radius(surface_m2) -> int:
+    """Rayon de recherche adapté à la taille du site : rayon du disque de même surface + 25 m de marge
+    (imprécision du géocodage des anciens sites), borné entre 30 et 400 m. Un rayon fixe large
+    attribuerait à une petite parcelle urbaine tous les anciens sites industriels du quartier."""
+    import math
+    try:
+        s_ = float(surface_m2 or 0)
+    except (TypeError, ValueError):
+        s_ = 0.0
+    return int(max(30, min(400, round(math.sqrt(max(s_, 0) / math.pi) + 25))))
+
+
+def enrich_georisques(rec: Record, rayon_m: int | None = None, base_url: str | None = None) -> tuple[Record, list[str]]:
     """Renseigne basias_count, basol, sis, icpe_count (+ régime, SEVESO, statut).
     Chaque base est interrogée indépendamment ; les échecs sont listés."""
+    if rayon_m is None:
+        rayon_m = search_radius(rec.get("surface_m2"))
     if not (rec.has("lat") and rec.has("lon")):
         return rec, ["Géorisques : coordonnées manquantes, bases de pollution non interrogées"]
     base = (base_url or GEORISQUES_URL).rstrip("/")

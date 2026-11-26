@@ -282,3 +282,17 @@ def test_fusion_sans_doublon_quand_identifiants_differents():
     geo = [{"site_id": "999", "site_nom": "Usine", "comm_insee": "59350", "unite_fonciere_surface": 1000, "longitude": 3.0, "latitude": 50.0}]
     m = K.merge_cartofriches(attr, geo)
     assert len(m) == 1 and m[0]["latitude"] == 50.0 and m[0]["site_id"] == "A"
+
+
+def test_rayon_adapte_a_la_taille_du_site():
+    assert K.search_radius(234) == 34          # petite parcelle urbaine (cas réel : Teinturerie, Lille)
+    assert K.search_radius(None) == 30
+    assert K.search_radius(100_000) == 203     # site de 10 ha
+    assert K.search_radius(10_000_000) == 400  # plafond
+
+
+def test_laureat_fonds_friches_signale_un_projet():
+    rows = [{"site_id": "X", "site_nom": "A", "comm_insee": "59350", "unite_fonciere_surface": 5000,
+             "source_nom": "Appel à projet Fonds Friches", "site_statut": "friche potentielle"}]
+    recs, _ = K.cartofriches_records(rows)
+    assert recs[0].get("projet_connu") is True

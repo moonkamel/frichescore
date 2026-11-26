@@ -532,7 +532,8 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
             report["importees"] += 1
         if dvf and recs:
             y = date.today().year
-            ind, errs = connectors.fetch_dvf(code, [y - 4, y - 3, y - 2])
+            ind, errs = connectors.fetch_dvf(code, [y - 4, y - 3, y - 2, y - 1])
+            errs = [e for e in errs if "404" not in e or str(y - 1) not in e]  # dernière année pas toujours publiée
             report["erreurs"] += [f"{code} : {e}" for e in errs]
             if ind:
                 existing = db.get_commune(code)

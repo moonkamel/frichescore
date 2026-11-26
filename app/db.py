@@ -154,7 +154,11 @@ def load_sites(perimeter: dict | None = None) -> dict[str, Record]:
         f = Record.from_dict(json.loads(r["data"]))
         base = communes.get(r["code_insee"])
         if base is not None:
-            merged = Record(values={k: v for k, v in base.values.items() if not k.startswith("_")}, prov=dict(base.prov))
+            real = not str(r["origine"] or "").startswith("demo")
+            # Une friche réelle n'hérite jamais d'indicateurs communaux de démonstration
+            keep = {k: v for k, v in base.values.items() if not k.startswith("_")
+                    and not (real and k in base.prov and base.prov[k].source.endswith("(démo)"))}
+            merged = Record(values=keep, prov={k: p for k, p in base.prov.items() if k in keep})
             merged = merged.merged_with(f)
         else:
             merged = f

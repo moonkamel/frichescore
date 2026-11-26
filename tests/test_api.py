@@ -102,3 +102,19 @@ def test_parsers_connecteurs():
     csv2 = "id_mutation,nature_mutation,valeur_fonciere,type_local,surface_reelle_bati\n3,Vente,240000,Appartement,50\n"
     out = dvf_indicators({2022: csv1, 2024: csv2})
     assert out["prix_m2_logement"] == 4800 and out["evol_prix_3ans_pct"] > 0
+
+
+def test_friche_reelle_n_herite_pas_de_la_demo(c):
+    from app import db
+    from app.scoring.record import Provenance, Record
+    r = Record()
+    p = Provenance("API Cartofriches (Cerema)", "2026-11-26", "moyen")
+    for k, v in {"id": "CF-TEST-1", "nom": "Réelle", "code_insee": "59350", "departement": "59", "surface_m2": 500,
+                 "lat": 50.6, "lon": 3.05, "activite_passee": "BASIAS"}.items():
+        r.set(k, v, p)
+    db.upsert_friche(r, "cartofriches")
+    site = db.load_sites({"type": "ids", "values": ["CF-TEST-1"]})["CF-TEST-1"]
+    assert not any(pr.source.endswith("(démo)") for pr in site.prov.values())
+    assert not site.has("zonage_abc")  # indicateur communal de démo non hérité
+    demo = next(iter(db.load_sites({"type": "communes", "values": ["59350"]}).values()))
+    assert demo.has("zonage_abc") or demo.get("_origine") != "demo"
