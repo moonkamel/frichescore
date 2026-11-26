@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS ia_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, type TEXT, objet TEXT, entree INTEGER, sortie INTEGER, cout_usd REAL);
 CREATE TABLE IF NOT EXISTS ia_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, usage TEXT, created_at TEXT, note TEXT, modele TEXT, cout_usd REAL);
+CREATE TABLE IF NOT EXISTS reglages (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS maj_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, debut TEXT, fin TEXT, declencheur TEXT, etat TEXT, resume TEXT);
 CREATE TABLE IF NOT EXISTS score_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, ts TEXT, usage TEXT,
     global REAL, rang INTEGER, rang_sur INTEGER, dims TEXT, motif TEXT);
@@ -364,3 +367,60 @@ def ia_note_latest(fid: str, usage: str | None = None) -> dict | None:
     d = dict(r)
     d["note"] = json.loads(d["note"])
     return d
+
+
+# -------------------------------------------------------------- réglages et mises à jour
+def setting_get(cle: str, default=None):
+    with conn() as c:
+        r = c.execute("SELECT valeur FROM reglages WHERE cle = ?", (cle,)).fetchone()
+    return json.loads(r["valeur"]) if r else default
+
+
+def setting_set(cle: str, valeur) -> None:
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO reglages VALUES (?, ?, ?)", (cle, json.dumps(valeur, ensure_ascii=False), now()))
+
+
+def maj_start(declencheur: str) -> int:
+    with conn() as c:
+        return c.execute("INSERT INTO maj_journal (debut, declencheur, etat) VALUES (?, ?, 'en_cours')",
+                         (now(), declencheur)).lastrowid
+
+
+def maj_end(mid: int, etat: str, resume: dict) -> None:
+    with conn() as c:
+        c.execute("UPDATE maj_journal SET fin = ?, etat = ?, resume = ? WHERE id = ?",
+                  (now(), etat, json.dumps(resume, ensure_ascii=False), mid))
+
+
+def maj_list(limit: int = 15) -> list[dict]:
+    with conn() as c:
+        rows = c.execute("SELECT * FROM maj_journal ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [{**dict(r), "resume": json.loads(r["resume"]) if r["resume"] else None} for r in rows]
+
+
+def friches_rows(departements: list[str]) -> list[dict]:
+    """Friches réelles (hors démonstration) des départements donnés, telles que stockées."""
+    q = ",".join("?" * len(departements))
+    with conn() as c:
+        rows = c.execute(f"SELECT id, origine, data FROM friches WHERE origine NOT LIKE 'demo%' AND departement IN ({q})",
+                         departements).fetchall()
+    return [{"id": r["id"], "origine": r["origine"], "data": json.loads(r["data"])} for r in rows]
+
+
+def communes_rows(codes: list[str]) -> list[dict]:
+    if not codes:
+        return []
+    out = []
+    with conn() as c:
+        for i in range(0, len(codes), 500):
+            part = codes[i:i + 500]
+            q = ",".join("?" * len(part))
+            out += [{"code": r["code_insee"], "data": json.loads(r["data"])}
+                    for r in c.execute(f"SELECT code_insee, data FROM communes WHERE code_insee IN ({q})", part)]
+    return out
+
+
+def friche_origins() -> dict[str, str]:
+    with conn() as c:
+        return {r[0]: r[1] for r in c.execute("SELECT id, origine FROM friches")}

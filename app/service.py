@@ -554,7 +554,8 @@ def enrich_sites(ids: list[str] | None = None, adresse: bool = True, progress=No
 
 
 def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True, progress=None,
-                        communes: bool = True, sites: bool = True) -> dict:
+                        communes: bool = True, sites: bool = True, max_codes: int | None = 50,
+                        refresh: bool = False) -> dict:
     """Import d'un périmètre. `progress(etape, fait, total)` est appelé au fil de l'eau.
     Les bases Géorisques sont interrogées en parallèle (6 friches à la fois)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -563,17 +564,26 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
         if progress:
             progress(etape, fait, total)
 
-    report = {"importees": 0, "communes_dvf": 0, "erreurs": [], "avertissements": []}
-    codes = codes[:50]
+    report = {"importees": 0, "communes_dvf": 0, "erreurs": [], "avertissements": [], "communes_interrogees": []}
+    codes = codes[:max_codes] if max_codes else list(codes)
     all_recs = []
-    for i, code in enumerate(codes):
-        tick(f"Cartofriches : commune {code}", i, len(codes))
-        try:
-            recs, warns = connectors.fetch_cartofriches(code)
-            report["avertissements"] += [f"{code} : {w}" for w in warns]
-            all_recs += recs
-        except connectors.ConnectorError as e:
-            report["erreurs"].append(f"{code} : Cartofriches — {e.message}")
+    done = 0
+    tick("Cartofriches", 0, len(codes))
+    with ThreadPoolExecutor(max_workers=4 if len(codes) > 4 else 1) as ex:
+        futs = {ex.submit(connectors.fetch_cartofriches, code): code for code in codes}
+        for f in as_completed(futs):
+            code = futs[f]
+            try:
+                recs, warns = f.result()
+                report["avertissements"] += [f"{code} : {w}" for w in warns]
+                report["communes_interrogees"].append(code)
+                all_recs += recs
+            except connectors.ConnectorError as e:
+                report["erreurs"].append(f"{code} : Cartofriches — {e.message}")
+            except Exception as e:  # noqa: BLE001
+                report["erreurs"].append(f"{code} : Cartofriches — {type(e).__name__}")
+            done += 1
+            tick(f"Cartofriches : commune {code}", done, len(codes))
     if georisques and all_recs:
         done = 0
         tick("Géorisques : bases de pollution", 0, len(all_recs))
@@ -593,6 +603,7 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
     for rec in all_recs:
         db.upsert_friche(rec, "cartofriches")
     report["importees"] = len(all_recs)
+    report["ids_importes"] = [r.get("id") for r in all_recs]
     if dvf:
         y = date.today().year
         found = sorted({r.get("code_insee") for r in all_recs if r.get("code_insee")})
@@ -608,7 +619,7 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
                 report["communes_dvf"] += 1
     if communes and all_recs:
         found = sorted({r.get("code_insee") for r in all_recs if r.get("code_insee")})
-        rep = enrich_communes(found, progress)
+        rep = enrich_communes(found, progress, refresh)
         report["indicateurs_communaux"] = rep["indicateurs"]
         report["erreurs"] += rep["erreurs"]
     if sites and all_recs:

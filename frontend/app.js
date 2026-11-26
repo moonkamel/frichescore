@@ -1238,6 +1238,7 @@ async function renderDonnees() {
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="site-adr" checked> risques à l'adresse (sinon : risques de la commune, plus rapide)</label></div>
     <div id="site-out" class="small" style="margin-top:6px"></div>
     <p class="small muted" style="margin-top:6px">Arrêts de transport : © contributeurs OpenStreetMap, licence ODbL.</p></div>
+  <div class="card" id="maj-card"><h3>Mise à jour automatique et packs de données</h3><p class="small muted">Chargement…</p></div>
   <div class="card doc"><h3>Méthode</h3>
     <p>Chaque friche reçoit une note de 0 à 100 sur cinq dimensions, calculées <b>séparément pour chaque usage</b> (${Object.values(m.usages).join(", ").toLowerCase()}).</p>
     <ul>
@@ -1272,6 +1273,7 @@ async function renderDonnees() {
   $("#imp-check").onclick = () => doImport(true);
   bindCommunes();
   bindSites();
+  renderMaj();
   $("#imp-go").onclick = () => doImport(false);
   const urls = await api("/api/connecteurs").catch(() => ({}));
   urls.communes = "API Géo · data.gouv.fr · Cerema (adresses résolues automatiquement)";
@@ -1375,6 +1377,106 @@ function bindCommunes() {
     } catch (e) { out.innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
     finally { b.disabled = false; }
   };
+}
+const MAJ_ETAT = { en_cours: ["en cours", "warn"], termine: ["terminée", "ok"], termine_avec_erreurs: ["terminée avec erreurs", "warn"], erreur: ["échec", "bad"] };
+function fmtScore(v) { return String(Math.round(v)); }
+function fmtOctets(n) { return n > 1048576 ? `${(n / 1048576).toFixed(1).replace(".", ",")} Mo` : `${Math.max(1, Math.round(n / 1024))} ko`; }
+function majResume(r) {
+  if (!r) return "";
+  const parts = [];
+  if (r.message) parts.push(esc(r.message));
+  if (r.mode === "pack") parts.push(`${Object.keys(r.packs || {}).length} pack(s) importé(s)`);
+  else if (r.communes !== undefined) parts.push(`${r.communes} commune(s), ${r.importees ?? 0} friche(s) Cartofriches`);
+  if (r.nb_nouvelles) parts.push(`<b>${r.nb_nouvelles} nouvelle(s)</b>`);
+  if (r.nb_scores_modifies) parts.push(`<b>${r.nb_scores_modifies} score(s) modifié(s)</b>`);
+  if (r.nb_absentes) parts.push(`${r.nb_absentes} absente(s) de Cartofriches`);
+  if (r.packs_publies) parts.push(`${r.packs_publies.length} pack(s) publié(s)`);
+  if (r.erreurs && r.erreurs.length) parts.push(`${r.erreurs.length} erreur(s)`);
+  return parts.join(" · ");
+}
+function majDetail(r) {
+  if (!r) return "";
+  const row = (x) => `<tr class="click" data-id="${esc(x.id)}"><td>${esc(x.nom || x.id)}</td><td>${esc(x.commune || "")}</td><td class="num">${x.avant == null ? "—" : fmtScore(x.avant)}</td><td class="num"><b>${(x.apres ?? x.global) == null ? "—" : fmtScore(x.apres ?? x.global)}</b></td><td class="num">${x.ecart == null ? "" : `<span style="color:${x.ecart < 0 ? "var(--bad)" : "var(--good)"}">${x.ecart > 0 ? "+" : ""}${String(x.ecart).replace(".", ",")}</span>`}</td></tr>`;
+  return `${(r.scores_modifies || []).length ? `<h4 style="margin-top:8px">Scores modifiés (écart d'au moins 2 points)</h4><table class="fv"><thead><tr><th>Site</th><th>Commune</th><th>Avant</th><th>Après</th><th>Écart</th></tr></thead><tbody>${r.scores_modifies.map(row).join("")}</tbody></table>` : ""}
+    ${(r.nouvelles || []).length ? `<h4 style="margin-top:8px">Nouvelles friches</h4><table class="fv"><thead><tr><th>Site</th><th>Commune</th><th></th><th>Score</th><th></th></tr></thead><tbody>${r.nouvelles.map(row).join("")}</tbody></table>` : ""}
+    ${(r.absentes_de_cartofriches || []).length ? `<p class="small" style="margin-top:8px"><b>Absentes de Cartofriches</b> (conservées dans la base, à vérifier : requalifiées ou retirées de l'inventaire) : ${r.absentes_de_cartofriches.map((x) => esc(typeof x === "string" ? x : `${x.nom || x.id} (${x.id})`)).join(", ")}</p>` : ""}
+    ${(r.erreurs || []).length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 20).map(esc).join("<br>")}</div>` : ""}`;
+}
+async function renderMaj() {
+  const box = $("#maj-card"); if (!box) return;
+  let st;
+  try { st = await api("/api/maj"); } catch (e) { box.innerHTML = `<h3>Mise à jour automatique et packs de données</h3><div class="alert bad">${esc(e.message)}</div>`; return; }
+  const r = st.reglages;
+  box.innerHTML = `<h3>Mise à jour automatique et packs de données</h3>
+    <p class="small muted" style="margin:4px 0 8px">Chaque nuit, le serveur remet la base à jour pour que personne n'attende les API publiques. Deux modes : interroger <b>directement les API</b> (Cartofriches, Géorisques, DVF, indicateurs communaux et de site) ou télécharger les <b>packs départementaux</b> préparés par un serveur FricheScore central. Vos saisies terrain, votre portfolio et vos documents ne sont jamais modifiés ni inclus dans un pack.</p>
+    <div class="grid3" style="align-items:end">
+      <label class="toggle"><input type="checkbox" id="maj-actif" ${r.actif ? "checked" : ""}> Mise à jour automatique chaque nuit</label>
+      <div><label class="small muted">Heure (${esc(st.fuseau)})</label><input type="time" id="maj-heure" value="${esc(r.heure)}"></div>
+      <div><label class="small muted">Mode</label><select id="maj-mode"><option value="apis" ${r.mode === "apis" ? "selected" : ""}>API publiques (directement)</option><option value="pack" ${r.mode === "pack" ? "selected" : ""}>Packs d'un serveur FricheScore central</option></select></div>
+      <div style="grid-column:1 / 3"><label class="small muted">Départements couverts entièrement (toutes leurs communes), séparés par des virgules</label><input type="text" id="maj-deps" value="${esc(r.departements.join(", "))}" placeholder="ex. 59, 62"></div>
+      <div id="maj-url-box"><label class="small muted">Adresse du serveur central</label><input type="text" id="maj-url" value="${esc(r.pack_url)}" placeholder="https://frichescore.mon-organisme.fr"></div>
+    </div>
+    <div class="row" style="margin-top:8px;justify-content:flex-start;flex-wrap:wrap;gap:12px" id="maj-apis-opts">
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="maj-refresh" ${r.rafraichir_fichiers ? "checked" : ""}> retélécharger les fichiers nationaux (LOVAC, zonage, BPE…)</label>
+      <label class="toggle" style="flex:0;white-space:nowrap" title="Ce serveur devient serveur central : un pack par département est écrit après chaque mise à jour et servi à l'adresse /api/packs/&lt;département&gt;.json.gz"><input type="checkbox" id="maj-pub" ${r.publier_packs ? "checked" : ""}> publier les packs pour d'autres postes</label>
+    </div>
+    <p class="hint">${r.mode === "apis" ? "Sont mises à jour : les communes portant déjà des friches Cartofriches, toutes les communes des départements listés, et les indicateurs des friches importées par CSV. Comptez plusieurs heures pour un département entier la première nuit." : "Le pack de chaque département listé est téléchargé puis importé en quelques secondes."}</p>
+    <div class="row" style="margin-top:8px;justify-content:flex-start"><button class="btn" id="maj-save" style="flex:0;white-space:nowrap">Enregistrer</button>
+      <button class="btn sec" id="maj-run" style="flex:0;white-space:nowrap" ${st.en_cours ? "disabled" : ""}>${st.en_cours ? "Mise à jour en cours…" : "Lancer maintenant"}</button>
+      <span class="small muted" style="align-self:center">${st.prochaine ? `Prochaine exécution : ${esc(st.prochaine.slice(0, 16).replace("T", " à "))}` : "Mise à jour automatique désactivée"}</span></div>
+    <div id="maj-out" class="small" style="margin-top:6px"></div>
+    <h4 style="margin-top:14px">Journal des mises à jour</h4>
+    ${st.journal.length ? `<table class="fv" style="margin-top:4px"><thead><tr><th>Début</th><th>Déclencheur</th><th>État</th><th>Durée</th><th>Résumé</th><th></th></tr></thead><tbody>
+      ${st.journal.map((j, i) => { const [lbl, cls] = MAJ_ETAT[j.etat] || [j.etat, ""]; return `<tr><td>${esc((j.debut || "").replace("T", " "))}</td><td>${esc(j.declencheur)}</td><td><span class="chip ${cls}">${esc(lbl)}</span></td><td class="num">${j.resume && j.resume.duree_s != null ? (j.resume.duree_s < 60 ? "< 1 min" : `${Math.round(j.resume.duree_s / 60)} min`) : ""}</td><td class="small">${majResume(j.resume)}</td><td>${j.resume ? `<button class="btn sm sec" data-majd="${i}">Détail</button>` : ""}</td></tr>`; }).join("")}</tbody></table><div id="maj-detail"></div>` : `<p class="small muted">Aucune mise à jour pour l'instant.</p>`}
+    <h4 style="margin-top:14px">Packs de données par département</h4>
+    <div class="grid2" style="margin-top:4px">
+      <div><p class="small muted" style="margin:0 0 6px">Exporter les friches réelles et les indicateurs communaux d'un ou plusieurs départements dans un fichier unique, pour l'installer sur un autre poste sans rien réinterroger.</p>
+        <div class="row"><input type="text" id="pk-deps" placeholder="ex. 59, 62"><button class="btn sec" id="pk-exp" style="flex:0;white-space:nowrap">Exporter le pack</button></div></div>
+      <div><p class="small muted" style="margin:0 0 6px">Importer un pack (.json.gz). Une friche de même identifiant venant d'une autre source (votre CSV, par exemple) n'est jamais écrasée.</p>
+        <input type="file" id="pk-file" accept=".gz,.json,application/gzip,application/json">
+        <div class="row" style="margin-top:6px;justify-content:flex-start"><button class="btn sec" id="pk-check" style="flex:0;white-space:nowrap">Vérifier sans importer</button><button class="btn" id="pk-imp" style="flex:0">Importer</button></div></div>
+    </div>
+    <div id="pk-out" class="small" style="margin-top:6px"></div>
+    ${st.packs_publies.length ? `<p class="small muted" style="margin-top:8px">Packs publiés par ce serveur : ${st.packs_publies.map((p) => `<a href="/api/packs/${esc(p.departement)}.json.gz">${esc(p.departement)}</a> (${fmtOctets(p.octets)}, ${esc(p.date.replace("T", " "))})`).join(" · ")}</p>` : ""}`;
+  const modeUi = () => { const pk = $("#maj-mode").value === "pack"; $("#maj-url-box").style.visibility = pk ? "visible" : "hidden"; $("#maj-apis-opts").style.display = pk ? "none" : ""; };
+  $("#maj-mode").onchange = modeUi; modeUi();
+  const deps = (v) => v.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  $("#maj-save").onclick = async () => {
+    try {
+      await api("/api/maj", { actif: $("#maj-actif").checked, heure: $("#maj-heure").value, mode: $("#maj-mode").value, departements: deps($("#maj-deps").value),
+        pack_url: $("#maj-url").value, rafraichir_fichiers: $("#maj-refresh").checked, publier_packs: $("#maj-pub").checked }, "PUT");
+      toast("Réglages de mise à jour enregistrés."); renderMaj();
+    } catch (e) { $("#maj-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+  };
+  $("#maj-run").onclick = async () => {
+    const b = $("#maj-run"); b.disabled = true;
+    try {
+      const stj = await pollJob(await api("/api/maj/lancer", {}), $("#maj-out"));
+      $("#maj-out").innerHTML = stj.etat === "erreur" ? `<div class="alert bad">Échec : ${esc(stj.erreur)}</div>` : `<div class="alert info">Mise à jour terminée en ${stj.duree_s} s. ${majResume(stj.rapport)}</div>`;
+      S.meta = await api("/api/meta"); await loadSites(true); renderSide();
+      setTimeout(renderMaj, 2500);
+    } catch (e) { $("#maj-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; b.disabled = false; }
+  };
+  document.querySelectorAll("[data-majd]").forEach((b) => (b.onclick = () => { $("#maj-detail").innerHTML = majDetail(st.journal[+b.dataset.majd].resume) || `<p class="small muted">Rien à signaler.</p>`; bindRows("#maj-detail"); }));
+  $("#pk-exp").onclick = () => {
+    const d = deps($("#pk-deps").value); if (!d.length) { toast("Indiquez au moins un département."); return; }
+    window.location.href = `/api/packs/export?departements=${encodeURIComponent(d.join(","))}`;
+  };
+  const pkImport = async (dry) => {
+    const f = $("#pk-file").files[0]; if (!f) { toast("Choisissez un pack."); return; }
+    const fd = new FormData(); fd.append("file", f); fd.append("dry_run", dry ? "true" : "false");
+    const out = $("#pk-out"); out.innerHTML = "Lecture du pack…";
+    try {
+      const res = await fetch("/api/packs/import", { method: "POST", body: fd });
+      const r = await res.json(); if (!res.ok) throw new Error(r.detail || res.statusText);
+      out.innerHTML = `<div class="alert info"><b>${dry ? "Vérification" : "Import"} du pack ${esc((r.departements || []).join(", "))}</b> (créé le ${esc((r.cree_le || "").replace("T", " "))}${r.derniere_mise_a_jour ? `, données mises à jour le ${esc(r.derniere_mise_a_jour.replace("T", " "))}` : ""}) :
+        ${r.friches_nouvelles} friche(s) nouvelle(s), ${r.friches_mises_a_jour} mise(s) à jour, ${r.communes} commune(s)${r.friches_ignorees.length ? `, ${r.friches_ignorees.length} ignorée(s)` : ""}.</div>
+        ${r.friches_ignorees.length ? `<div class="small muted">${r.friches_ignorees.map(esc).join("<br>")}</div>` : ""}`;
+      if (!dry) { S.meta = await api("/api/meta"); await loadSites(true); renderSide(); }
+    } catch (e) { out.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+  };
+  $("#pk-check").onclick = () => pkImport(true);
+  $("#pk-imp").onclick = () => pkImport(false);
 }
 function importReport(r, fname) {
   const dry = r.mode === "vérification";

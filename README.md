@@ -151,6 +151,37 @@ stockées en base et s'appliquent immédiatement. Le rapport de pré-cadrage lis
 et leur justification. Les règles de pertinence par usage (dimension 1 : seuils de surface, distances…) restent
 dans [`app/scoring/usages.py`](app/scoring/usages.py).
 
+### Mise à jour automatique et packs de données
+
+**Données → Mise à jour automatique et packs de données.** Chaque nuit (heure réglable, 3 h par défaut, fuseau
+Europe/Paris), le serveur remet la base à jour pour que personne n'attende les API publiques :
+
+- **mode API publiques** : réinterroge Cartofriches, Géorisques, DVF et les indicateurs communaux et de site pour les
+  communes portant déjà des friches Cartofriches et pour **toutes les communes des départements listés** (comptez
+  plusieurs heures pour un département entier la première nuit) ; rafraîchit aussi les indicateurs des friches importées
+  par CSV ;
+- **mode packs** : télécharge le pack de chaque département listé auprès d'un serveur FricheScore central et l'importe
+  en quelques secondes.
+
+Le journal indique pour chaque passage les **nouvelles friches**, les **scores qui ont bougé d'au moins 2 points**
+(avant / après) et les friches **absentes de Cartofriches** (conservées, à vérifier). Une mise à jour peut aussi être
+lancée à la main ; si le serveur était éteint à l'heure prévue, elle part au démarrage suivant de la journée.
+
+**Packs** : un pack (`.json.gz`) contient les friches réelles d'un ou plusieurs départements et les indicateurs des
+communes concernées — jamais les saisies terrain, le portfolio, les documents ni les notes IA. Export et import depuis
+l'interface (vérification possible avant import ; une friche de même identifiant venant d'une autre source n'est pas
+écrasée). En cochant « publier les packs », le serveur devient **serveur central** : il écrit un pack par département
+après chaque mise à jour et le sert à l'adresse `/api/packs/<département>.json.gz`. À exposer derrière un accès
+authentifié (proxy inverse) si le serveur est joignable depuis Internet : FricheScore n'a pas de gestion de comptes.
+
+En ligne de commande (tâche planifiée du système, par exemple) :
+
+```bash
+docker compose exec frichescore python -m app.maj --departements 59 62 --publier
+```
+
+`FRICHESCORE_PLANIFICATEUR=0` désactive le planificateur intégré.
+
 ## Extraction de documents par l'IA (optionnelle)
 
 Dans la fiche d'une friche, **Documents — analyse par IA** : déposez un PDF (étude de sol, diagnostic, acte, courrier
@@ -163,6 +194,15 @@ Activation : créer un fichier `.env` à côté de `docker-compose.yml` (jamais 
 `ANTHROPIC_API_KEY=...`, puis `docker compose up -d`. Sans clé, FricheScore fonctionne comme avant.
 Réglages : `FRICHESCORE_IA_QUOTA_MOIS` (200 documents par défaut), `FRICHESCORE_IA_MODELE`, `FRICHESCORE_IA_EFFORT`.
 Le coût estimé de chaque analyse est affiché et cumulé par mois.
+
+Avec la même clé :
+
+- **Contre-analyse en langage naturel** (onglet Contre-analyse) : « et si la mairie exigeait une zone humide
+  compensatoire, avec 500 k€ du Fonds Vert ? ». L'IA traduit la question en hypothèses du moteur (affichées et
+  reprenables dans les curseurs), signale ce qui n'est pas modélisable ; le calcul reste celui du moteur.
+- **Note d'analyse** (fiche d'une friche) et **conclusion argumentée** (Jumeau) : rédigées uniquement à partir du
+  dossier FricheScore du site. Chaque chiffre cité est recherché dans ce dossier ; ceux qu'on n'y retrouve pas sont
+  signalés « à vérifier ». La note figure dans le PDF de la fiche avec la mention « rédigée par IA, à relire ».
 
 ⚠️ Les documents sont transmis à l'API Anthropic : une case de consentement est obligatoire à chaque envoi. Pour les
 documents contenant des données personnelles (actes de propriété), vérifier l'accord du client et les conditions de

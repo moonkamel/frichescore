@@ -16,13 +16,18 @@ services:
       # Extraction de documents par l'IA (optionnelle) : clé lue dans le fichier .env (jamais versionné)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - FRICHESCORE_IA_QUOTA_MOIS=${FRICHESCORE_IA_QUOTA_MOIS:-200}
+      # Heure locale (planification de la mise à jour nocturne, dates du journal)
+      - TZ=${TZ:-Europe/Paris}
+      # Mettre 0 pour désactiver le planificateur de mise à jour nocturne
+      - FRICHESCORE_PLANIFICATEUR=${FRICHESCORE_PLANIFICATEUR:-1}
     ports:
       # Port de la machine hôte configurable (8010 par défaut, pour ne pas gêner un service déjà sur 8000)
       - "${FRICHESCORE_PORT:-8010}:8000"
     volumes:
       - frichescore-data:/data
       # Ce volume contient la base (friches, portfolio, saisies terrain, paramètres calibrés)
-      # et le calendrier des financements édité depuis l'interface (funding_windows.json).
+      # et le calendrier des financements édité depuis l'interface (funding_windows.json),
+      # le cache des fichiers nationaux et les packs départementaux publiés (dossier packs/).
     restart: unless-stopped
 
 volumes:

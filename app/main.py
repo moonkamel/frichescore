@@ -22,6 +22,8 @@ FRONT = Path(__file__).resolve().parent.parent / "frontend"
 @asynccontextmanager
 async def lifespan(_app):
     service.ensure_seed()
+    from . import maj
+    maj.demarrer_planificateur()
     yield
 
 
@@ -266,35 +268,8 @@ class CartoReq(BaseModel):
     sites: bool = True
 
 
-_JOBS: dict[str, dict] = {}
-
-
-def _start_job(fn, libelle: str = "Tâche") -> dict:
-    """Exécute `fn(progress)` en tâche de fond ; suivi via GET /api/ingest/jobs/{id}."""
-    import threading
-    import time as _t
-    import uuid
-    jid = uuid.uuid4().hex[:12]
-    job = {"id": jid, "libelle": libelle, "etat": "en_cours", "etape": "Démarrage", "fait": 0, "total": 0, "rapport": None,
-           "erreur": None, "debut": _t.time(), "duree_s": None}
-    _JOBS[jid] = job
-    for old in sorted(_JOBS, key=lambda k: _JOBS[k]["debut"])[:-50]:  # on garde les 50 dernières tâches
-        if _JOBS[old]["etat"] != "en_cours":
-            _JOBS.pop(old, None)
-
-    def prog(etape, fait, total):
-        job.update(etape=etape, fait=fait, total=total)
-
-    def run():
-        try:
-            job["rapport"] = fn(prog)
-            job["etat"] = "termine"
-        except Exception as e:  # noqa: BLE001
-            job.update(etat="erreur", erreur=f"{type(e).__name__} : {e}")
-        job["duree_s"] = round(_t.time() - job["debut"])
-
-    threading.Thread(target=run, daemon=True).start()
-    return job
+from .jobs import JOBS as _JOBS  # noqa: E402
+from .jobs import start_job as _start_job  # noqa: E402
 
 
 @app.post("/api/ingest/cartofriches")
@@ -544,6 +519,70 @@ def demo_reset():
 def delete_origin(origine: str):
     db.delete_origin(origine)
     return {"ok": True}
+
+
+# ------------------------------------------------------- mise à jour automatique et packs
+@app.get("/api/maj")
+def maj_get():
+    from . import maj
+    return maj.etat()
+
+
+@app.put("/api/maj")
+def maj_put(data: dict):
+    from . import maj
+    try:
+        maj.enregistrer(data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return maj.etat()
+
+
+@app.post("/api/maj/lancer")
+def maj_run():
+    from . import maj
+    return maj.lancer("manuel")
+
+
+@app.get("/api/packs/export")
+def pack_export(departements: str):
+    from . import maj
+    deps = [d for d in departements.replace(";", ",").split(",") if d.strip()]
+    try:
+        raw = maj.construire_pack(deps)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    name = f"frichescore_pack_{'-'.join(sorted(maj.norm_dep(d) for d in deps))}_{db.now()[:10]}.json.gz"
+    return Response(raw, media_type="application/gzip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/packs/import")
+async def pack_import(file: UploadFile = File(...), dry_run: bool = Form(False)):
+    from . import maj
+    raw = await file.read()
+    if len(raw) > maj.MAX_PACK_BYTES:
+        raise HTTPException(413, "pack trop volumineux")
+    try:
+        return maj.importer_pack(raw, dry_run)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/packs")
+def packs_list():
+    from . import maj
+    return {"packs": maj.packs_publies()}
+
+
+@app.get("/api/packs/{nom}")
+def pack_get(nom: str):
+    """Packs publiés par ce serveur (mode « serveur central ») : /api/packs/59.json.gz"""
+    from . import maj
+    dep = nom.removesuffix(".json.gz").upper()
+    f = maj.packs_dir() / f"{dep}.json.gz"
+    if not maj.DEP_RE.match(dep) or not f.exists():
+        raise HTTPException(404, "aucun pack publié pour ce département")
+    return FileResponse(f, media_type="application/gzip", filename=f"{dep}.json.gz")
 
 
 @app.exception_handler(Exception)

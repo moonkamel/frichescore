@@ -87,6 +87,15 @@ def fetch_geo(code: str) -> tuple[dict, dict]:
     return out, diag
 
 
+def communes_du_departement(dep: str) -> list[str]:
+    """Codes INSEE des communes d'un département (API Géo)."""
+    with K._client(60) as c:
+        data, _full, _st = K._get(c, f"{GEO_API_URL.rstrip('/')}/departements/{dep}/communes", {"fields": "code", "format": "json"})
+    if not isinstance(data, list):
+        raise K.ConnectorError("réponse inattendue de l'API Géo", GEO_API_URL)
+    return sorted(str(x["code"]) for x in data if isinstance(x, dict) and x.get("code"))
+
+
 # ------------------------------------------------- fichiers data.gouv.fr
 def resolve_resource(name: str) -> dict:
     """Ressource la plus pertinente d'un jeu de données data.gouv.fr (adresse, titre, date)."""
