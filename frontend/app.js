@@ -367,8 +367,12 @@ async function openDrawer(id, usage, keepWhatif) {
   document.body.style.overflow = "hidden";
   $("#drawer-panel").innerHTML = `<div class="d-body loading">Chargement de la fiche…</div>`;
   try {
-    const d = await api(`/api/sites/${encodeURIComponent(id)}`, { usage, weights: S.weights, d5: S.d5 });
+    const [d, docs] = await Promise.all([
+      api(`/api/sites/${encodeURIComponent(id)}`, { usage, weights: S.weights, d5: S.d5 }),
+      api(`/api/sites/${encodeURIComponent(id)}/documents`).catch(() => null),
+    ]);
     S.drawer.data = d;
+    S.drawer.docs = docs;
     if (S.drawer.whatif) await runWhatif(true);
     renderDrawer();
   } catch (e) { $("#drawer-panel").innerHTML = `<div class="d-body">Erreur : ${esc(e.message)}</div>`; }
@@ -387,6 +391,7 @@ function renderDrawer() {
     $("#drawer-panel").innerHTML = head + `<div class="d-body">
       <div class="alert bad"><b>Friche non évaluable.</b> Données minimales absentes : ${d.manquants.map(esc).join(" ; ")}. FricheScore refuse de produire un score qui serait faux.</div>
       <div class="card"><h3>Pour rendre ce site évaluable</h3>${recoHtml(d.recommandations)}</div>
+      ${docsCard()}
       ${fieldForm(d)}
       <div class="card"><h3>Fiche de vie de la donnée</h3>${ficheVie(d.fiche_vie)}</div></div>`;
     bindDrawer(); return;
@@ -449,10 +454,87 @@ function renderDrawer() {
     </div>
 
     <div class="card"><h3>Études complémentaires recommandées</h3><p class="small muted" style="margin:4px 0">L'outil ne remplace pas un diagnostic : voici ce qu'il faudrait savoir pour fiabiliser le score.</p>${recoHtml(d.recommandations)}</div>
+    ${docsCard()}
     ${fieldForm(d)}
     <div class="card"><h3>Fiche de vie de la donnée</h3><p class="small muted" style="margin:4px 0 8px">Source, date et niveau de confiance de chaque indicateur. Les lignes surlignées ont plus de 10 ans.</p>${ficheVie(d.fiche_vie)}</div>
   </div>`;
   bindDrawer();
+}
+function docsCard() {
+  const D = S.drawer.docs;
+  if (!D) return "";
+  const st = D.statut;
+  const head = `<h3>Documents — analyse par IA</h3>
+    <p class="small muted" style="margin:4px 0 10px">Déposez une étude de sol, un acte, un courrier de la DREAL… L'IA <b>propose</b> des valeurs, chacune avec sa page et sa citation ; seules celles que vous cochez deviennent des données terrain et font évoluer le score.</p>`;
+  if (!st.active) return `<div class="card" id="docs-card">${head}<div class="alert">Extraction IA non activée : renseignez la clé <code>ANTHROPIC_API_KEY</code> dans le fichier <code>.env</code> puis redémarrez (voir README).</div></div>`;
+  const ex = D.extractions || [];
+  return `<div class="card" id="docs-card">${head}
+    <div class="row" style="flex-wrap:wrap;justify-content:flex-start;align-items:center">
+      <input type="file" id="doc-file" accept="application/pdf,.pdf" style="flex:0 1 320px">
+      <button class="btn" id="doc-go" style="flex:0;white-space:nowrap">Analyser le document</button></div>
+    <label class="toggle" style="margin-top:6px"><input type="checkbox" id="doc-consent"> Je suis autorisé·e à transmettre ce document à l'API Anthropic (Claude) pour analyse. S'il contient des données personnelles (acte de propriété…), leur traitement est couvert par un accord avec le client ou elles ont été masquées.</label>
+    <div class="small muted">${st.documents} / ${st.quota_mois} documents analysés ce mois-ci · coût estimé ${fmt(st.cout_usd, 2)} $ · modèle ${esc(st.modele)}</div>
+    <div id="doc-out" class="small" style="margin-top:6px"></div>
+    ${ex.map(extractionHtml).join("")}</div>`;
+}
+function extractionHtml(e) {
+  const r = e.resultat;
+  const headline = `<div class="row" style="justify-content:space-between;align-items:baseline"><b style="flex:1">${esc(e.fichier)}</b>
+    <span class="small muted" style="flex:0;white-space:nowrap">${esc(e.created_at.replace("T", " "))}${e.cout_usd != null ? ` · ${fmt(e.cout_usd, 3)} $` : ""}</span></div>`;
+  if (e.statut === "en_cours") return `<div class="card" style="background:#fafbf9;margin-top:10px">${headline}<div class="small muted">Analyse en cours…</div></div>`;
+  if (e.statut === "erreur") return `<div class="card" style="background:#fafbf9;margin-top:10px">${headline}<div class="alert bad">${esc(e.erreur)}</div></div>`;
+  const pdf = (p) => `<a href="/api/documents/${e.id}.pdf#page=${p}" target="_blank" rel="noopener">p. ${p}</a>`;
+  const done = !!e.valide_le;
+  return `<div class="card" style="background:#fafbf9;margin-top:10px" data-ex="${e.id}">${headline}
+    <div class="small"><span class="chip">${esc(r.type_document.replaceAll("_", " "))}</span>${r.date_document ? ` daté du ${esc(r.date_document)}` : ""}${r.auteur_organisme ? ` · ${esc(r.auteur_organisme)}` : ""}</div>
+    <p class="small" style="margin:6px 0">${esc(r.resume)}</p>
+    ${done ? `<div class="alert info">Valeurs enregistrées le ${esc(e.valide_le.replace("T", " "))}${e.valide_par ? " par " + esc(e.valide_par) : ""}.</div>` : ""}
+    ${r.valeurs.length ? `<table class="fv"><thead><tr><th></th><th>Indicateur</th><th>Valeur proposée</th><th>Confiance</th><th>Preuve</th></tr></thead><tbody>
+      ${r.valeurs.map((v, i) => `<tr data-i="${i}" style="${v.utilisable ? "" : "opacity:.6"}">
+        <td><input type="checkbox" class="v-keep" ${v.utilisable && v.confiance !== "faible" && !done ? "checked" : ""} ${done || !String(v.citation || "").trim() ? "disabled" : ""} title="${v.utilisable ? "" : "Corrigez la valeur avant de cocher"}"></td>
+        <td><b>${esc(v.libelle)}</b>${v.probleme ? `<div class="${v.utilisable ? "muted" : "delta-neg"}">${esc(v.probleme)}</div>` : ""}</td>
+        <td><input type="text" class="v-val" value="${esc(v.valeur)}" style="width:120px" ${done ? "disabled" : ""}><div class="muted">${esc(v.justification || "")}</div></td>
+        <td><select class="v-conf" ${done ? "disabled" : ""}>${["eleve", "moyen", "faible"].map((c) => `<option ${v.confiance === c ? "selected" : ""}>${c}</option>`).join("")}</select></td>
+        <td>${pdf(v.page)} — <i>« ${esc(v.citation)} »</i></td></tr>`).join("")}</tbody></table>`
+      : `<div class="small muted">Aucune valeur d'indicateur n'a pu être extraite de ce document.</div>`}
+    ${r.mesures.length ? `<h4 style="margin-top:10px">Mesures relevées</h4><table class="fv"><thead><tr><th>Substance</th><th>Milieu</th><th>Valeur</th><th>Référence</th><th>Dépassement</th><th>Preuve</th></tr></thead><tbody>
+      ${r.mesures.map((m) => `<tr><td>${esc(m.substance)}</td><td>${esc(m.milieu.replaceAll("_", " "))}</td><td class="num">${fmt(m.valeur, 2)} ${esc(m.unite)}</td><td>${esc(m.valeur_reference)}</td>
+        <td><span class="chip ${m.depassement === "oui" ? "bad" : m.depassement === "non" ? "ok" : ""}">${esc(m.depassement)}</span></td><td>${pdf(m.page)}</td></tr>`).join("")}</tbody></table>` : ""}
+    ${r.points_vigilance.length ? `<h4 style="margin-top:10px">Points de vigilance</h4>${r.points_vigilance.map((p) => `<div class="alert">${esc(p.texte)} <span class="small">(${pdf(p.page)})</span></div>`).join("")}` : ""}
+    ${r.limites ? `<p class="small muted" style="margin-top:6px"><b>Limites du document :</b> ${esc(r.limites)}</p>` : ""}
+    ${!done && r.valeurs.some((v) => String(v.citation || "").trim()) ? `<div class="row" style="margin-top:8px;justify-content:flex-start"><input type="text" class="v-auteur" placeholder="Validé par (optionnel)" style="max-width:220px">
+      <button class="btn v-save" style="flex:0;white-space:nowrap">Enregistrer les valeurs cochées comme données terrain</button></div>` : ""}
+  </div>`;
+}
+function bindDocs() {
+  const go = $("#doc-go");
+  if (go) go.onclick = async () => {
+    const f = $("#doc-file").files[0];
+    if (!f) { toast("Choisissez un fichier PDF."); return; }
+    if (!$("#doc-consent").checked) { toast("Cochez la case de consentement avant l'envoi."); return; }
+    const fd = new FormData(); fd.append("file", f); fd.append("consentement", "true");
+    go.disabled = true;
+    const out = $("#doc-out");
+    try {
+      const job = await api(`/api/sites/${encodeURIComponent(S.drawer.id)}/documents`, fd);
+      const st = await pollJob(job, out);
+      if (st.etat === "erreur") toast("Analyse impossible : " + st.erreur, 6000);
+      else toast(`Analyse terminée : ${st.rapport.valeurs} valeur(s) proposée(s), ${fmt(st.rapport.cout_usd, 3)} $.`, 5000);
+      openDrawer(S.drawer.id, S.drawer.data.usage, true);
+    } catch (e) { out.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; go.disabled = false; }
+  };
+  document.querySelectorAll("#docs-card [data-ex] .v-save").forEach((b) => (b.onclick = async () => {
+    const card = b.closest("[data-ex]");
+    const items = [...card.querySelectorAll("tr[data-i]")].map((tr) => ({ index: +tr.dataset.i, retenir: tr.querySelector(".v-keep").checked,
+      valeur: tr.querySelector(".v-val").value, confiance: tr.querySelector(".v-conf").value }));
+    if (!items.some((i) => i.retenir)) { toast("Aucune valeur cochée."); return; }
+    try {
+      const r = await api(`/api/sites/${encodeURIComponent(S.drawer.id)}/documents/${card.dataset.ex}/valider`,
+        { items, auteur: card.querySelector(".v-auteur").value || null, weights: S.weights, d5: S.d5 });
+      toast(`${r.enregistrees.length} valeur(s) enregistrée(s)${r.erreurs.length ? " — " + r.erreurs.join(" ; ") : ""} : score mis à jour.`, 6000);
+      await refreshSite(S.drawer.id); openDrawer(S.drawer.id, S.drawer.data.usage);
+    } catch (e) { toast("Erreur : " + e.message, 6000); }
+  }));
 }
 function recoHtml(recos) {
   if (!recos || !recos.length) return `<p class="small muted">Aucune étude complémentaire prioritaire.</p>`;
@@ -528,6 +610,7 @@ async function runWhatif(silent) {
 }
 function bindDrawer() {
   const p = $("#drawer-panel");
+  bindDocs();
   p.querySelectorAll(".utabs button").forEach((b) => (b.onclick = () => { S.drawer.data.usage = b.dataset.u; S.drawer.usage = b.dataset.u; renderDrawer(); }));
   bindValueInput("wi"); bindValueInput("fd");
   const pdfb = $("#d-pdf"); if (pdfb) pdfb.onclick = () => download(`/api/sites/${encodeURIComponent(S.drawer.id)}/pdf`, { usage: S.drawer.data.usage, weights: S.weights, d5: S.d5, profile: S.profile }, `frichescore_${S.drawer.id}.pdf`);

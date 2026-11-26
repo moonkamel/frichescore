@@ -615,3 +615,80 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
         report["indicateurs_sites"] = rep["indicateurs"]
         report["erreurs"] += rep["erreurs"]
     return report
+
+
+# ------------------------------------------------------- extraction IA
+def ia_status() -> dict:
+    import os
+    from .ia import extraction as E
+    quota = int(os.environ.get("FRICHESCORE_IA_QUOTA_MOIS", "200"))
+    return {"active": E.configured(), "modele": E.MODEL, "quota_mois": quota, **db.ia_month_stats(),
+            "prix": {"entree_usd_par_million": E.PRIX_ENTREE, "sortie_usd_par_million": E.PRIX_SORTIE}}
+
+
+def ia_start(sid: str, fichier: str, data: bytes) -> tuple[str, callable]:
+    """Vérifie et enregistre le document, puis renvoie (id d'extraction, fonction à exécuter en tâche de fond)."""
+    import hashlib
+    import uuid
+    from .ia import extraction as E
+    st = ia_status()
+    if not st["active"]:
+        raise E.IAError("extraction IA non activée : renseigner ANTHROPIC_API_KEY (voir README)")
+    if st["documents"] >= st["quota_mois"]:
+        raise E.IAError(f"quota mensuel atteint ({st['quota_mois']} documents) : réglable par FRICHESCORE_IA_QUOTA_MOIS")
+    sites = db.load_sites({"type": "ids", "values": [sid]})
+    if sid not in sites:
+        raise KeyError(sid)
+    E.check_pdf(data)
+    sha = hashlib.sha256(data).hexdigest()
+    folder = db.DB_PATH.parent / "documents"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{sha}.pdf").write_bytes(data)  # conservé localement pour vérifier les citations
+    eid = uuid.uuid4().hex[:12]
+    db.ia_create(eid, sid, fichier, sha, len(data), E.MODEL)
+    rec = sites[sid]
+    contexte = (f"friche « {rec.get('nom')} », commune de {rec.get('commune')} ({rec.get('code_insee')}), "
+                f"surface {rec.get('surface_m2') or 'inconnue'} m², type {rec.get('type_friche') or 'inconnu'}")
+
+    def run(progress=None):
+        if progress:
+            progress("Analyse du document par l'IA (de quelques secondes à quelques minutes)", 0, 1)
+        try:
+            r = E.call_model(data, contexte)
+        except E.IAError as e:
+            db.ia_update(eid, statut="erreur", erreur=str(e))
+            raise
+        res = E.normalise(r["resultat"])
+        db.ia_update(eid, statut="termine", resultat=res, usage=r["usage"], modele=r["modele"], cout_usd=E.cout_usd(r["usage"]))
+        return {"extraction": eid, "valeurs": len(res["valeurs"]), "cout_usd": E.cout_usd(r["usage"])}
+    return eid, run
+
+
+def ia_validate(sid: str, eid: str, items: list[dict], auteur: str | None, weights, d5) -> dict:
+    """Enregistre comme données terrain les valeurs retenues par l'utilisateur (avec page et citation)."""
+    from .ia import extraction as E
+    ex = db.ia_get(eid)
+    if not ex or ex["friche_id"] != sid:
+        raise KeyError(eid)
+    if ex["statut"] != "termine":
+        raise ValueError("extraction non terminée")
+    res = ex["resultat"]
+    vals = res["valeurs"]
+    saved, errors = [], []
+    for it in items:
+        i = it.get("index")
+        if not isinstance(i, int) or not (0 <= i < len(vals)) or not it.get("retenir"):
+            continue
+        v = vals[i]
+        valeur = it.get("valeur") if it.get("valeur") not in (None, "") else v.get("valeur")
+        src = (f"« {ex['fichier']} », p. {v.get('page')} — extrait par IA, validé"
+               f"{' par ' + auteur if auteur else ''} : « {str(v.get('citation'))[:160]} »")
+        try:
+            field_add(sid, v["indicateur"], valeur, src, E.default_date(res), it.get("confiance") or v.get("confiance") or "moyen",
+                      auteur, weights, d5)
+            saved.append(v["indicateur"])
+        except ValueError as e:
+            errors.append(f"{v.get('libelle')} : {e}")
+    if saved:
+        db.ia_update(eid, valide_le=db.now(), valide_par=auteur)
+    return {"enregistrees": saved, "erreurs": errors}

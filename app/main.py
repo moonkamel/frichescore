@@ -314,6 +314,62 @@ def sites_enrich(r: SitesReq):
     return _start_job(lambda prog: service.enrich_sites(r.ids or None, r.adresse, prog))
 
 
+# ---------------------------------------------------------- extraction IA
+@app.get("/api/ia/statut")
+def ia_status():
+    return service.ia_status()
+
+
+@app.post("/api/sites/{sid}/documents")
+async def ia_upload(sid: str, file: UploadFile = File(...), consentement: bool = Form(False)):
+    """Analyse d'un document PDF par l'IA (tâche de fond). Le consentement est obligatoire :
+    le document est transmis à l'API Anthropic."""
+    from .ia.extraction import IAError
+    if not consentement:
+        raise HTTPException(400, "consentement requis : le document est transmis à l'API Anthropic")
+    data = await file.read()
+    try:
+        eid, run = service.ia_start(sid, file.filename or "document.pdf", data)
+    except KeyError:
+        raise HTTPException(404, "site introuvable")
+    except IAError as e:
+        raise HTTPException(422, str(e))
+    job = _start_job(run)
+    return {**job, "extraction": eid}
+
+
+@app.get("/api/sites/{sid}/documents")
+def ia_list(sid: str):
+    return {"extractions": db.ia_list(sid), "statut": service.ia_status()}
+
+
+class IAValidReq(BaseModel):
+    items: list[dict[str, Any]]
+    auteur: str | None = None
+    weights: dict[str, float] | None = None
+    d5: bool = True
+
+
+@app.post("/api/sites/{sid}/documents/{eid}/valider")
+def ia_validate(sid: str, eid: str, r: IAValidReq):
+    try:
+        return service.ia_validate(sid, eid, r.items, r.auteur, r.weights, r.d5)
+    except KeyError:
+        raise HTTPException(404, "extraction introuvable")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/documents/{eid}.pdf")
+def ia_pdf(eid: str):
+    ex = db.ia_get(eid)
+    p = db.DB_PATH.parent / "documents" / f"{(ex or {}).get('sha256')}.pdf"
+    if not ex or not p.exists():
+        raise HTTPException(404, "document introuvable")
+    return FileResponse(p, media_type="application/pdf", filename=ex["fichier"],
+                        content_disposition_type="inline")
+
+
 class CommunesReq(BaseModel):
     codes_insee: list[str] | None = None
     rafraichir: bool = False

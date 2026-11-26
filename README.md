@@ -147,6 +147,24 @@ stockées en base et s'appliquent immédiatement. Le rapport de pré-cadrage lis
 et leur justification. Les règles de pertinence par usage (dimension 1 : seuils de surface, distances…) restent
 dans [`app/scoring/usages.py`](app/scoring/usages.py).
 
+## Extraction de documents par l'IA (optionnelle)
+
+Dans la fiche d'une friche, **Documents — analyse par IA** : déposez un PDF (étude de sol, diagnostic, acte, courrier
+de la DREAL…). L'API Claude (modèle `claude-opus-5-5` par défaut) **propose** des valeurs d'indicateurs, des mesures
+chiffrées et des points de vigilance, chacun avec **sa page et sa citation exacte**. Rien n'entre dans le score sans
+validation : seules les valeurs cochées deviennent des données terrain, tracées « « fichier », p. 14 — extrait par IA,
+validé par … ». Une valeur sans citation n'est pas proposable. Le PDF est conservé localement pour vérification.
+
+Activation : créer un fichier `.env` à côté de `docker-compose.yml` (jamais versionné) contenant
+`ANTHROPIC_API_KEY=...`, puis `docker compose up -d`. Sans clé, FricheScore fonctionne comme avant.
+Réglages : `FRICHESCORE_IA_QUOTA_MOIS` (200 documents par défaut), `FRICHESCORE_IA_MODELE`, `FRICHESCORE_IA_EFFORT`.
+Le coût estimé de chaque analyse est affiché et cumulé par mois.
+
+⚠️ Les documents sont transmis à l'API Anthropic : une case de consentement est obligatoire à chaque envoi. Pour les
+documents contenant des données personnelles (actes de propriété), vérifier l'accord du client et les conditions de
+traitement des données, ou masquer ces données avant l'envoi. L'IA a pour consigne de ne jamais restituer le nom d'une
+personne physique.
+
 ## Architecture
 
 ```

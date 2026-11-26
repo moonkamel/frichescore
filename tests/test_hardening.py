@@ -170,3 +170,9 @@ def test_test_connexion_endpoint(c):
     assert r.status_code == 400
     r = c.post("/api/connecteurs/test", json={"source": "dvf", "base_url": "ftp://x"})
     assert r.status_code == 400
+
+
+def test_nom_de_commune_harmonise():
+    from app.ingest.mapping import nom_commune
+    assert nom_commune("LILLE") == "Lille" and nom_commune("Lille") == "Lille"
+    assert nom_commune("MARCQ-EN-BAROEUL") == "Marcq-en-Baroeul" and nom_commune("LA MADELEINE") == "La Madeleine"

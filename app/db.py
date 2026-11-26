@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS portfolio (
     friche_id TEXT PRIMARY KEY, stage TEXT, usage TEXT, notes TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS parametres (
     path TEXT PRIMARY KEY, value TEXT NOT NULL, note TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS ia_extractions (
+    id TEXT PRIMARY KEY, friche_id TEXT, fichier TEXT, sha256 TEXT, taille INTEGER, created_at TEXT,
+    modele TEXT, statut TEXT, resultat TEXT, usage TEXT, cout_usd REAL, erreur TEXT,
+    valide_le TEXT, valide_par TEXT);
 CREATE TABLE IF NOT EXISTS score_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, ts TEXT, usage TEXT,
     global REAL, rang INTEGER, rang_sur INTEGER, dims TEXT, motif TEXT);
@@ -165,6 +169,9 @@ def load_sites(perimeter: dict | None = None) -> dict[str, Record]:
         if r["id"] in field:
             merged = merged.merged_with(field[r["id"]])
         _derive_distance(merged)
+        if isinstance(merged.values.get("commune"), str):
+            from .ingest.mapping import nom_commune
+            merged.values["commune"] = nom_commune(merged.values["commune"])
         merged.values["_origine"] = r["origine"]
         out[r["id"]] = merged
     return out
@@ -289,3 +296,43 @@ def delete_param(path: str | None = None):
             c.execute("DELETE FROM parametres")
         else:
             c.execute("DELETE FROM parametres WHERE path = ?", (path,))
+
+
+# --------------------------------------------------------- extractions IA
+def ia_create(eid: str, fid: str, fichier: str, sha: str, taille: int, modele: str):
+    with conn() as c:
+        c.execute("INSERT INTO ia_extractions (id, friche_id, fichier, sha256, taille, created_at, modele, statut) "
+                  "VALUES (?,?,?,?,?,?,?, 'en_cours')", (eid, fid, fichier, sha, taille, now(), modele))
+
+
+def ia_update(eid: str, **fields):
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    vals = [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v for v in fields.values()]
+    with conn() as c:
+        c.execute(f"UPDATE ia_extractions SET {cols} WHERE id = ?", (*vals, eid))
+
+
+def _ia_row(r) -> dict:
+    d = dict(r)
+    for k in ("resultat", "usage"):
+        d[k] = json.loads(d[k]) if d.get(k) else None
+    return d
+
+
+def ia_list(fid: str) -> list[dict]:
+    with conn() as c:
+        return [_ia_row(r) for r in c.execute("SELECT * FROM ia_extractions WHERE friche_id = ? ORDER BY created_at DESC", (fid,))]
+
+
+def ia_get(eid: str) -> dict | None:
+    with conn() as c:
+        r = c.execute("SELECT * FROM ia_extractions WHERE id = ?", (eid,)).fetchone()
+    return _ia_row(r) if r else None
+
+
+def ia_month_stats() -> dict:
+    month = now()[:7]
+    with conn() as c:
+        r = c.execute("SELECT COUNT(*), COALESCE(SUM(cout_usd), 0) FROM ia_extractions WHERE substr(created_at, 1, 7) = ? "
+                      "AND statut != 'erreur'", (month,)).fetchone()
+    return {"mois": month, "documents": r[0], "cout_usd": round(r[1], 2)}

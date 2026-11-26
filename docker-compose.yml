@@ -13,6 +13,9 @@ services:
       - FRICHESCORE_FORCE_IPV4=${FRICHESCORE_FORCE_IPV4:-1}
       # Message d'ouverture TLS compact (évite les blocages de gros paquets TLS sous Docker/VPN). Mettre 0 pour désactiver.
       - FRICHESCORE_TLS_COMPACT=${FRICHESCORE_TLS_COMPACT:-1}
+      # Extraction de documents par l'IA (optionnelle) : clé lue dans le fichier .env (jamais versionné)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - FRICHESCORE_IA_QUOTA_MOIS=${FRICHESCORE_IA_QUOTA_MOIS:-200}
     ports:
       # Port de la machine hôte configurable (8010 par défaut, pour ne pas gêner un service déjà sur 8000)
       - "${FRICHESCORE_PORT:-8010}:8000"

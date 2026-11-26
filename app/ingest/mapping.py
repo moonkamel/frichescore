@@ -190,6 +190,26 @@ def parse_cell(key: str, raw) -> tuple[object, str | None, str | None]:
     return str(raw), None, None
 
 
+PARTICULES = {"de", "du", "des", "la", "le", "les", "sur", "sous", "en", "et", "lès", "lez", "aux", "au", "d", "l"}
+
+
+def nom_commune(v: str) -> str:
+    """« VILLENEUVE-D'ASCQ » -> « Villeneuve-d'Ascq » ; ne touche pas un nom déjà en casse mixte."""
+    if not v or not v.isupper():
+        return v
+    out, word = [], ""
+    seps = " -'’"
+    for ch in v.lower() + " ":
+        if ch in seps:
+            if word:
+                out.append(word if (word in PARTICULES and out) else word[:1].upper() + word[1:])
+                word = ""
+            out.append(ch)
+        else:
+            word += ch
+    return "".join(out).strip()
+
+
 def row_to_record(row: dict, origine_label: str, default_date: str | None = None,
                   default_conf: str | None = None) -> tuple[Record, list[str]]:
     """Version simple (connecteurs) : ignore les problèmes de cellules."""
@@ -223,6 +243,8 @@ def validate_row(row: dict, origine_label: str, default_date: str | None = None,
             issues.append({"colonne": col, "valeur": str(raw)[:60], "niveau": "avertissement", "message": warn})
         if val is None:
             continue
+        if key == "commune" and isinstance(val, str):
+            val = nom_commune(val)
         src = cols.get(f"{base}__source") or (f"{CATALOG[key][2]} via {origine_label}" if key in CATALOG else origine_label)
         conf_raw = cols.get(f"{base}__confiance")
         conf = None
