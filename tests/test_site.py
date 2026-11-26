@@ -120,3 +120,60 @@ def test_scoring_utilise_les_risques():
     ur = evaluate_usage(r, "logement")
     assert ur["dims"]["d3"] > base["dims"]["d3"] and ur["cost"]["total_haut"] > base["cost"]["total_haut"]
     assert any("PPRi" in x["etude"] for x in recommendations(r))
+
+
+# ------------------------------------------------ urbanisme, nature, milieux humides
+def test_vocation_plu():
+    assert SI.plu_from_props({"typezone": "U", "destdomi": "02", "libelle": "UE"})["plu_vocation"] == "activite"
+    p = SI.plu_from_props({"typezone": "AUc", "destdomi": "00", "libelong": "Zone à urbaniser à vocation d'habitat"})
+    assert p["plu_zone"] == "AU" and p["plu_vocation"] == "habitat"
+    assert SI.plu_from_props({"typezone": "U", "libelle": "UB"})["plu_vocation"] == "mixte"
+    assert SI.plu_from_props({"typezone": "N", "libelle": "Nh"}) ["plu_zone"] == "N"
+
+
+def gpu_handler(req):
+    u = str(req.url)
+    if "gpu/zone-urba" in u:
+        assert json.loads(req.url.params["geom"])["type"] == "Point"
+        return httpx.Response(200, json={"type": "FeatureCollection", "features": [
+            {"properties": {"libelle": "UE", "libelong": "Zone urbaine d'activités économiques", "typezone": "U", "destdomi": "02"}}]})
+    if "assiette-sup-s" in u:
+        return httpx.Response(200, json={"features": [{"properties": {"suptype": "ac1"}}, {"properties": {"suptype": "pm1"}}]})
+    if "natura-habitat" in u or "znieff2" in u:
+        return httpx.Response(200, json={"features": [{"properties": {}}]} if "znieff2" in u else {"features": []})
+    if "nature/" in u:
+        return httpx.Response(200, json={"features": []})
+    if "GetCapabilities" in u:
+        return httpx.Response(200, text="<wfs:FeatureTypeList><FeatureType><Name>AUTRE:couche</Name></FeatureType>"
+                                        "<FeatureType><Name>MILIEUX_HUMIDES:probabilite_drom</Name></FeatureType>"
+                                        "<FeatureType><Name>MILIEUX_HUMIDES:milieux_potentiellement_humides_seuil</Name></FeatureType>"
+                                        "</wfs:FeatureTypeList>")
+    if "GetFeature" in u:
+        assert req.url.params["TYPENAMES"] == "MILIEUX_HUMIDES:milieux_potentiellement_humides_seuil"
+        return httpx.Response(200, json={"type": "FeatureCollection", "features": [{"properties": {}}]})
+    return handler(req)
+
+
+def test_urbanisme_nature_humides(mock):
+    mock(gpu_handler)
+    v, d = SI.fetch_gpu(50.62, 3.07)
+    assert v == {"plu_zone": "U", "plu_vocation": "activite", "servitudes_count": 2} and d["libelle"] == "UE"
+    v, _ = SI.fetch_nature(50.62, 3.07)
+    assert v == {"natura2000": False, "znieff": True}
+    v, d = SI.fetch_zones_humides(50.62, 3.07)
+    assert v == {"zone_humide": "probable"} and "seuil" in d["couche"]
+
+
+def test_gpu_sans_document_d_urbanisme(mock):
+    mock(lambda req: httpx.Response(200, json={"features": []}))
+    with pytest.raises(K.ConnectorError, match="RNU"):
+        SI.fetch_gpu(50.62, 3.07)
+
+
+def test_enrichissement_complet_avec_urbanisme(mock):
+    mock(gpu_handler)
+    out, rep = SI.enrich_sites([site_rec()], adresse=False)
+    v = out["CF-1"]
+    assert v["plu_vocation"][0] == "activite" and v["plu_vocation"][1].confiance == "moyen"
+    assert v["zone_humide"][0] == "probable" and "prélocalisation" in v["zone_humide"][1].methode
+    assert v["znieff"][0] is True and v["servitudes_count"][0] == 2

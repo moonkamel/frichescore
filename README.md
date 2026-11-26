@@ -87,6 +87,10 @@ et doivent être calibrées sur vos propres opérations.
 | Arrêts de transport — OpenStreetMap via Overpass (© contributeurs OSM, ODbL) | Desserte en transports collectifs | Une requête par commune |
 | PVGIS 5.3 (Commission européenne) | Ensoleillement (photovoltaïque) | API, carreaux de 0,1° |
 | Rapport de risques / GASPAR — Géorisques | Risque d'inondation, aléa argiles | API (1 appel/s), repli commune |
+| Géoportail de l'urbanisme — API Carto IGN | Zone et vocation PLU, servitudes | API, au point de chaque friche |
+| INPN — API Carto IGN (module Nature) | Natura 2000, ZNIEFF | API, au point |
+| Cartographie nationale des milieux humides (OFB/PatriNat) — Géoplateforme | Zone humide probable (prélocalisation) | WFS, couche trouvée dans le catalogue |
+| Base permanente des équipements — INSEE | Déficit d'équipements (enseignement, santé, sport-culture / moyenne nationale) | Fichier national, cache 30 jours |
 | Cadastre / fichiers fonciers, PLU(i) (GPU)… | Autres dimensions | Import CSV (une colonne par indicateur) |
 
 ### Connecteurs

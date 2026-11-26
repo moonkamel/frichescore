@@ -15,11 +15,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import re
 import time
 from datetime import date
 from pathlib import Path
+
+from concurrent.futures import ThreadPoolExecutor
 
 from ..scoring.record import Provenance
 from . import connectors as K
@@ -31,6 +34,8 @@ SNCF_DATASETS = [d.strip() for d in os.environ.get("SNCF_GARES_DATASETS", "gares
 OVERPASS_URL = os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter")
 PVGIS_URL = os.environ.get("PVGIS_URL", "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc")
 GEORISQUES_URL = os.environ.get("GEORISQUES_URL", "https://www.georisques.gouv.fr/api/v1")
+APICARTO_URL = os.environ.get("APICARTO_URL", "https://apicarto.ign.fr/api")
+GEOPF_WFS_URL = os.environ.get("GEOPF_WFS_URL", "https://data.geopf.fr/wfs/ows")
 OSM = "© contributeurs OpenStreetMap (ODbL) via Overpass"
 
 
@@ -263,6 +268,129 @@ def fetch_risques_commune(code_insee: str) -> tuple[dict, dict]:
     return out, {"url": full, "statut": st, "risques_commune": sorted(set(libs))[:20]}
 
 
+# ------------------------------------------- urbanisme (Géoportail de l'urbanisme)
+# Code CNIG « destdomi » (vocation dominante) -> vocation FricheScore. Liste à confirmer sur les données réelles :
+# en l'absence de code exploitable, la vocation est déduite du libellé long de la zone.
+DESTDOMI = {"01": "habitat", "02": "activite", "03": "equipement", "04": "naturelle", "05": "naturelle", "06": "naturelle"}
+VOC_MOTS = [("activit", "activite"), ("economi", "activite"), ("industri", "activite"), ("artisan", "activite"),
+            ("equipement", "equipement"), ("service public", "equipement"), ("habitat", "habitat"), ("residenti", "habitat"),
+            ("logement", "habitat"), ("mixte", "mixte"), ("centre", "mixte"), ("naturel", "naturelle"), ("agricol", "naturelle")]
+
+
+def _geom(lat: float, lon: float) -> str:
+    return json.dumps({"type": "Point", "coordinates": [round(lon, 6), round(lat, 6)]})
+
+
+def _features(data) -> list[dict]:
+    if isinstance(data, dict):
+        return [f.get("properties") or {} for f in data.get("features") or []]
+    return []
+
+
+def plu_from_props(props: dict) -> dict:
+    """Zone, vocation et libellés à partir des propriétés d'une zone du GPU."""
+    tz = str(props.get("typezone") or "").strip().upper()
+    zone = "AU" if tz.startswith("AU") else (tz[:1] if tz[:1] in ("U", "A", "N") else None)
+    code = str(props.get("destdomi") or "").strip()[:2]
+    voc = DESTDOMI.get(code)
+    if voc is None:
+        txt = _norm(f"{props.get('libelong') or ''} {props.get('libelle') or ''}")
+        voc = next((v for mot, v in VOC_MOTS if mot in txt), None)
+    if voc is None and zone == "U":
+        voc = "mixte"  # zone urbaine sans vocation spécialisée identifiée
+    if zone in ("A", "N") and voc is None:
+        voc = "naturelle"
+    return {"plu_zone": zone, "plu_vocation": voc, "libelle": props.get("libelle"), "libelong": props.get("libelong"),
+            "typezone": props.get("typezone"), "destdomi": props.get("destdomi")}
+
+
+def fetch_gpu(lat: float, lon: float) -> tuple[dict, dict]:
+    with K._client(45) as c:
+        z, full, st = K._get(c, f"{APICARTO_URL.rstrip('/')}/gpu/zone-urba", {"geom": _geom(lat, lon)})
+        feats = _features(z)
+        out, diag = {}, {"url": full, "statut": st, "zones": len(feats)}
+        if feats:
+            p = plu_from_props(feats[0])
+            diag.update({k: p[k] for k in ("libelle", "libelong", "typezone", "destdomi")})
+            if p["plu_zone"]:
+                out["plu_zone"] = p["plu_zone"]
+            if p["plu_vocation"]:
+                out["plu_vocation"] = p["plu_vocation"]
+        try:
+            sup, _f, _s = K._get(c, f"{APICARTO_URL.rstrip('/')}/gpu/assiette-sup-s", {"geom": _geom(lat, lon)})
+            out["servitudes_count"] = len(_features(sup))
+            diag["servitudes"] = sorted({str(f.get("suptype") or f.get("typeass") or "") for f in _features(sup)} - {""})[:10]
+        except K.ConnectorError as e:
+            diag["servitudes_erreur"] = e.message
+    if not feats:
+        raise K.ConnectorError("aucun document d'urbanisme publié sur le Géoportail de l'urbanisme à cet endroit "
+                               "(commune au RNU ou PLU non numérisé)", full, st)
+    return out, diag
+
+
+def fetch_nature(lat: float, lon: float) -> tuple[dict, dict]:
+    """Natura 2000 (habitats et oiseaux) et ZNIEFF (types 1 et 2) au point, via l'API Carto module Nature."""
+    res, diag = {}, {}
+    with K._client(45) as c:
+        for key, paths in (("natura2000", ("nature/natura-habitat", "nature/natura-oiseaux")),
+                           ("znieff", ("nature/znieff1", "nature/znieff2"))):
+            n, ok = 0, False
+            for path in paths:
+                try:
+                    data, _f, _s = K._get(c, f"{APICARTO_URL.rstrip('/')}/{path}", {"geom": _geom(lat, lon)})
+                    n += len(_features(data))
+                    ok = True
+                except K.ConnectorError as e:
+                    diag[path] = e.message
+            if ok:
+                res[key] = n > 0
+                diag[key] = n
+    if not res:
+        raise K.ConnectorError("API Carto (module Nature) injoignable : " + " ; ".join(f"{k} : {v}" for k, v in diag.items()))
+    return res, diag
+
+
+# ------------------------------------------- milieux humides (Géoplateforme, WFS)
+def humid_layer(refresh: bool = False) -> str:
+    """Nom de la couche WFS des milieux humides, trouvé dans le catalogue de la Géoplateforme (mis en cache)."""
+    forced = os.environ.get("ZONES_HUMIDES_COUCHE")
+    if forced:
+        return forced
+    p = cache_dir() / "wfs_milieux_humides.json"
+    if p.exists() and not refresh:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        if time.time() - d.get("ts", 0) < 90 * 86400 and d.get("couche"):
+            return d["couche"]
+    with K._client(120) as c:
+        txt, full, _st = K._get(c, GEOPF_WFS_URL, {"SERVICE": "WFS", "VERSION": "2.0.0", "REQUEST": "GetCapabilities"}, expect="text")
+    names = re.findall(r"<(?:wfs:)?Name>([^<]+)</(?:wfs:)?Name>", txt)
+    cands = [n for n in names if "humid" in n.lower()]
+    if not cands:
+        raise K.ConnectorError("aucune couche « milieux humides » dans le catalogue WFS de la Géoplateforme", full)
+
+    def score(n):
+        x = n.lower()
+        return (("milieu" in x) * 3 + ("seuil" in x or "potenti" in x or "pot" in x) * 2 + ("proba" in x) * 1
+                - ("drom" in x or "outre" in x) * 5, -len(x))
+    best = max(cands, key=score)
+    p.write_text(json.dumps({"couche": best, "candidates": cands[:30], "ts": time.time()}, ensure_ascii=False), encoding="utf-8")
+    return best
+
+
+def fetch_zones_humides(lat: float, lon: float, marge_m: float = 30) -> tuple[dict, dict]:
+    """Présence d'un milieu humide prélocalisé sur le site (marge de 30 m) : « probable » si présent, « non » sinon."""
+    layer = humid_layer()
+    dlat = marge_m / 111_000
+    dlon = marge_m / (111_000 * max(0.2, math.cos(math.radians(lat))))
+    params = {"SERVICE": "WFS", "VERSION": "2.0.0", "REQUEST": "GetFeature", "TYPENAMES": layer, "COUNT": 5,
+              "OUTPUTFORMAT": "application/json", "SRSNAME": "CRS:84",
+              "BBOX": f"{lon - dlon},{lat - dlat},{lon + dlon},{lat + dlat},CRS:84"}
+    with K._client(60) as c:
+        data, full, st = K._get(c, GEOPF_WFS_URL, params)
+    n = len(data.get("features") or []) if isinstance(data, dict) else 0
+    return {"zone_humide": "probable" if n else "non"}, {"url": full, "statut": st, "couche": layer, "objets": n}
+
+
 # ---------------------------------------------------------- orchestration
 def enrich_sites(recs: list, adresse: bool = True, progress=None) -> tuple[dict[str, dict], dict]:
     """Calcule les indicateurs de site. `recs` : Records avec id, lat, lon, code_insee.
@@ -332,6 +460,45 @@ def enrich_sites(recs: list, adresse: bool = True, progress=None) -> tuple[dict[
                                                                             "eleve", "plan incliné optimal, carreau de 0,1°"))
         except K.ConnectorError as e:
             rep["erreurs"].append(f"PVGIS {cell} : {e.message}")
+    # Urbanisme, espaces naturels protégés, milieux humides : 3 sources par site, 4 sites en parallèle
+    today_p = {
+        "gpu": lambda: Provenance("Géoportail de l'urbanisme — API Carto IGN", today, "eleve", "zone du document d'urbanisme au point"),
+        "gpu_voc": lambda: Provenance("Géoportail de l'urbanisme — API Carto IGN", today, "moyen",
+                                      "vocation déduite du code CNIG ou du libellé de la zone"),
+        "nature": lambda: Provenance("INPN — API Carto IGN (module Nature)", today, "eleve", "intersection au point"),
+        "zh": lambda: Provenance("Cartographie nationale des milieux humides (OFB/PatriNat) — Géoplateforme", today, "moyen",
+                                 "prélocalisation : présence probable, à confirmer sur le terrain"),
+    }
+
+    def per_site(r):
+        res, errs = {}, []
+        la, lo = r.get("lat"), r.get("lon")
+        for name, fn in (("urbanisme", fetch_gpu), ("nature", fetch_nature), ("milieux humides", fetch_zones_humides)):
+            try:
+                res[name] = fn(la, lo)[0]
+            except K.ConnectorError as e:
+                errs.append(f"{r.get('id')} : {name} — {e.message}")
+        return r, res, errs
+    done = 0
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for r, res, errs in ex.map(per_site, sites):
+            done += 1
+            if done % 5 == 0 or done == len(sites):
+                tick("Urbanisme, Natura 2000 / ZNIEFF, milieux humides", done, len(sites))
+            sid = r.get("id")
+            if len(rep["erreurs"]) < 300:
+                rep["erreurs"] += errs
+            u = res.get("urbanisme") or {}
+            if "plu_zone" in u:
+                put(sid, "plu_zone", u["plu_zone"], today_p["gpu"]())
+            if "plu_vocation" in u:
+                put(sid, "plu_vocation", u["plu_vocation"], today_p["gpu_voc"]())
+            if "servitudes_count" in u:
+                put(sid, "servitudes_count", u["servitudes_count"], today_p["gpu"]())
+            for k, v in (res.get("nature") or {}).items():
+                put(sid, k, v, today_p["nature"]())
+            if "zone_humide" in (res.get("milieux humides") or {}):
+                put(sid, "zone_humide", res["milieux humides"]["zone_humide"], today_p["zh"]())
     # Risques
     gaspar_cache: dict[str, dict | None] = {}
     for i, r in enumerate(sites):
@@ -393,6 +560,12 @@ def test_site(lat: float, lon: float, code_insee: str) -> dict:
         det["risques_commune"] = {"ok": True, "valeur": v, "detection": d}
     except K.ConnectorError as e:
         det["risques_commune"] = {"ok": False, "erreur": e.message}
+    for name, fn in (("urbanisme_gpu", fetch_gpu), ("natura2000_znieff", fetch_nature), ("milieux_humides", fetch_zones_humides)):
+        try:
+            v, d = fn(lat, lon)
+            det[name] = {"ok": True, "valeur": v, "detection": d}
+        except K.ConnectorError as e:
+            det[name] = {"ok": False, "erreur": e.message, "url": e.url, "detection": {"apercu": e.body}}
     ok = [k for k, v in det.items() if v.get("ok")]
     return {"source": "sites", "ok": bool(ok), "duree_ms": round((time.monotonic() - t0) * 1000),
             "resultat": {"sources_ok": ok, "sources_en_echec": [k for k in det if k not in ok]}, "detail": det,

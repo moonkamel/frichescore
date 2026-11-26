@@ -38,6 +38,10 @@ DATASETS = {
                    "prefer": [r"ensemble des communes", r"liste.*communes"], "avoid": [r"reclass", r"d[ée]class", r"dictionnaire"]},
     "lovac": {"slug": "logements-vacants-du-parc-prive-par-commune-departement-region-france", "label": "LOVAC (logements vacants)",
               "prefer": [r"commune"], "avoid": [r"departement", r"region", r"france", r"epci", r"schema", r"dictionnaire", r"documentation"]},
+    "bpe": {"slug": os.environ.get("BPE_DATASET", "base-permanente-des-equipements-1"), "label": "BPE (équipements, INSEE)",
+            "prefer": [r"commune", r"denombrement", r"ensemble"],
+            "avoid": [r"geolocalis", r"\bxy\b", r"dictionnaire", r"documentation", r"metadonn", r"variables", r"iris", r"departement",
+                      r"region", r"evolution"]},
     "sitadel": {"slug": "logements-autorises-et-commences-series-mensuelles-communales-en-date-de-prise-en-compte",
                 "label": "SITADEL (logements autorisés)", "prefer": [r"commun"], "avoid": [r"dictionnaire", r"documentation", r"m[ée]tadonn"]},
 }
@@ -601,6 +605,72 @@ def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tu
     return out, diag
 
 
+# ------------------------------------------------- équipements (BPE)
+FRANCE_POP = float(os.environ.get("FRANCE_POPULATION", "68600000"))
+DOMAINES_CLES = {"C": "enseignement", "D": "santé et action sociale", "F": "sports, loisirs et culture"}
+
+
+def parse_bpe(path: Path, codes: set[str]) -> tuple[dict, dict]:
+    """Nombre d'équipements d'enseignement, de santé et de sport-culture par commune (domaines C, D, F de la BPE)
+    et densité nationale de référence. Accepte un fichier de dénombrement (une ligne par commune et type) ou
+    géolocalisé (une ligne par équipement)."""
+    reader, headers = _reader(path)
+    nh = {h: _norm(h) for h in headers}
+    typ = next((h for h in headers if re.fullmatch(r"(typequ|type_?equ.*|facility_?type|typ_equ)", nh[h])), None) \
+        or next((h for h in headers if "typequ" in nh[h] or "facility" in nh[h]), None)
+    cnt = next((h for h in headers if re.fullmatch(r"(nb_?equip.*|nb|obs_?value|nombre|nb_equipements?)", nh[h])), None)
+    buf = []
+    for i, r in enumerate(reader):
+        buf.append(r)
+        if i >= 300:
+            break
+    code_col = find_code_column(headers, buf)
+    geo_col = None
+    if not code_col:  # format Melodi : « 2025-COM-59350 »
+        geo_col = next((h for h in headers if nh[h] in ("geo", "geo_object", "codgeo")), None)
+    diag = {"colonnes": headers[:30], "colonne_code": code_col or geo_col, "colonne_type": typ, "colonne_nombre": cnt}
+    if not typ or not (code_col or geo_col):
+        raise K.ConnectorError("colonnes non identifiées dans le fichier BPE (code commune, type d'équipement)")
+    per: dict[str, float] = {}
+    national = 0.0
+    n = 0
+
+    def handle(r):
+        nonlocal national, n
+        n += 1
+        t = str(r.get(typ) or "").strip().upper()
+        if t[:1] not in DOMAINES_CLES or len(t) < 2:
+            return
+        v = _num(r.get(cnt)) if cnt else 1.0
+        if v is None:
+            return
+        if code_col:
+            c = _code(r.get(code_col))
+        else:  # format Melodi : seules les lignes communales comptent (pas les agrégats départementaux ou régionaux)
+            m = re.search(r"COM-(\d{5}|2[AB]\d{3})$", str(r.get(geo_col) or ""))
+            if not m:
+                return
+            c = m.group(1)
+        national += v
+        if c in codes:
+            per[c] = per.get(c, 0.0) + v
+    for r in buf:
+        handle(r)
+    for r in reader:
+        handle(r)
+    diag.update(lignes=n, densite_nationale_1000hab=round(national / FRANCE_POP * 1000, 2) if national else None)
+    if not national:
+        raise K.ConnectorError("fichier BPE sans équipement des domaines enseignement, santé, sport-culture")
+    return per, diag
+
+
+def deficit_label(nb: float, population: float, nat_1000: float) -> tuple[str, float]:
+    """Déficit d'équipements : densité communale rapportée à la densité nationale."""
+    dens = nb / population * 1000 if population else 0.0
+    r = dens / nat_1000 if nat_1000 else 1.0
+    return ("fort" if r < 0.7 else "moyen" if r < 1.0 else "faible"), round(r, 2)
+
+
 # --------------------------------------------- consommation d'ENAF (Cerema)
 def fetch_conso_enaf(code: str) -> tuple[float | None, dict]:
     """Consommation d'espaces NAF 2011-2021 (ha) via l'API Cerema /indicateurs/conso_espace."""
@@ -661,7 +731,7 @@ def enrich_communes(codes: list[str], existing: dict[str, Record] | None = None,
         except K.ConnectorError as e:
             rep["erreurs"].append(f"{c} : API Géo — {e.message}")
     cs = set(codes)
-    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None)):
+    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None), ("bpe", parse_bpe)):
         tick(f"{DATASETS[name]['label']}", 0, 1)
         try:
             if name == "sitadel":  # interrogation filtrée de l'API DiDo (pas de fichier national)
@@ -678,6 +748,12 @@ def enrich_communes(codes: list[str], existing: dict[str, Record] | None = None,
             for c, v in vals.items():
                 if name == "zonage_abc":
                     setv(c, "zonage_abc", v, Provenance(src, d, "eleve"))
+                elif name == "bpe":
+                    pop = (recs[c].get("population") or (existing.get(c).get("population") if existing.get(c) else None))
+                    if pop:
+                        lab, ratio = deficit_label(v, pop, diag["densite_nationale_1000hab"])
+                        setv(c, "deficit_equipements", lab, Provenance(src, d, "moyen",
+                             f"enseignement, santé, sport-culture : densité {ratio:.2f} × la moyenne nationale"))
                 elif name == "lovac":
                     setv(c, "vacance_logement_pct", v, Provenance(src, str(diag.get("annee") or d), "moyen",
                                                                   "vacance du parc privé (LOVAC)"))
@@ -718,7 +794,7 @@ def test_communes(code: str, refresh: bool = False) -> dict:
         out["api_geo"] = {"ok": True, "url": diag["url"], "valeurs": {k: v for k, (v, _p) in vals.items()}}
     except K.ConnectorError as e:
         out["api_geo"] = {"ok": False, "erreur": e.message, "url": e.url}
-    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None)):
+    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None), ("bpe", parse_bpe)):
         try:
             if name == "sitadel":
                 vals, diag = sitadel_values({code}, refresh)

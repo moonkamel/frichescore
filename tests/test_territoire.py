@@ -352,3 +352,19 @@ def test_sitadel_504_persistant_message_clair(mock, monkeypatch):
     with pytest.raises(K.ConnectorError) as e:
         T.sitadel_values({"59350"})
     assert "serveur DiDo" in e.value.message and "réessayer plus tard" in e.value.message
+
+
+def test_bpe_denombrement_et_geolocalise(tmp_path):
+    p = write(tmp_path, "b.csv", "DEPCOM;TYPEQU;NB_EQUIP\n59350;C104;100\n59350;D201;300\n59350;B101;999\n59512;F101;20\n01001;C104;1\n")
+    out, diag = T.parse_bpe(p, {"59350", "59512"})
+    assert out == {"59350": 400.0, "59512": 20.0} and diag["colonne_type"] == "TYPEQU"
+    assert diag["densite_nationale_1000hab"] == round(421 / T.FRANCE_POP * 1000, 2)
+    p2 = write(tmp_path, "m.csv", "GEO;FACILITY_TYPE;OBS_VALUE\n2025-COM-59350;C104;5\n2025-COM-59350;F101;2\n2025-DEP-59;C104;99\n")
+    out2, d2 = T.parse_bpe(p2, {"59350"})
+    assert out2 == {"59350": 7.0} and d2["densite_nationale_1000hab"] == round(7 / T.FRANCE_POP * 1000, 2)  # agrégat DEP exclu
+
+
+def test_deficit_label():
+    assert T.deficit_label(500, 100_000, 10.0)[0] == "fort"     # 5 / 1000 hab. contre 10 au niveau national
+    assert T.deficit_label(900, 100_000, 10.0)[0] == "moyen"
+    assert T.deficit_label(1500, 100_000, 10.0) == ("faible", 1.5)
