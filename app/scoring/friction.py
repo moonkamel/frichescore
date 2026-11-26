@@ -120,6 +120,11 @@ def compute_friction(t: Tracker, usage: str, hyp: dict | None = None) -> dict:
     elif t.rec.get("proprietaire_type") != "public":
         f("Structure de propriété inconnue", "proprietaires_inconnus", "nb_proprietaires")
 
+    comp = hyp.get("compensation_zone_humide")
+    if comp in ("tous", "concernes") and usage != "renaturation":
+        if comp == "tous" or t.rec.get("zone_humide") in ("avere", "probable"):
+            f("Hypothèse : création d'une zone humide compensatoire exigée", "compensation_zone_humide", "zone_humide")
+
     extra = float(hyp.get("delai_supplementaire_mois", 0))
     if extra:
         f(f"Hypothèse : délais allongés de {extra:.0f} mois", (extra * C.FRICTION_POINTS_PAR_MOIS_HYPOTHESE, extra), None)

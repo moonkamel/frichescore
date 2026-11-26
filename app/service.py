@@ -692,3 +692,22 @@ def ia_validate(sid: str, eid: str, items: list[dict], auteur: str | None, weigh
     if saved:
         db.ia_update(eid, valide_le=db.now(), valide_par=auteur)
     return {"enregistrees": saved, "erreurs": errors}
+
+
+def ia_question(question: str, perimeter: dict, perimeter_label: str, usage, weights, d5) -> dict:
+    """Question en langage naturel -> hypothèses (IA) -> scénario calculé par le moteur."""
+    from .ia import client as IC
+    from .ia import questions as Q
+    question = (question or "").strip()
+    if len(question) < 5:
+        raise ValueError("question trop courte")
+    if len(question) > 2000:
+        raise ValueError("question trop longue (2 000 caractères maximum)")
+    ctx = (f"périmètre : {perimeter_label} ; usage cible : {C.USAGES.get(usage, 'meilleur usage par site') if usage else 'meilleur usage par site'}")
+    r = Q.interpret(question, ctx)
+    cout = IC.cout_usd(r["usage"])
+    db.ia_log("contre_analyse", question, r["usage"], cout)
+    out = {"question": question, "interpretation": r, "cout_usd": cout, "scenario": None}
+    if r["hypotheses"]:
+        out["scenario"] = stress(perimeter, usage, weights, d5, r["hypotheses"], r["top_n"])
+    return out

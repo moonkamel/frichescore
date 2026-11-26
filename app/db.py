@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS ia_extractions (
     id TEXT PRIMARY KEY, friche_id TEXT, fichier TEXT, sha256 TEXT, taille INTEGER, created_at TEXT,
     modele TEXT, statut TEXT, resultat TEXT, usage TEXT, cout_usd REAL, erreur TEXT,
     valide_le TEXT, valide_par TEXT);
+CREATE TABLE IF NOT EXISTS ia_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, type TEXT, objet TEXT, entree INTEGER, sortie INTEGER, cout_usd REAL);
+CREATE TABLE IF NOT EXISTS ia_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, usage TEXT, created_at TEXT, note TEXT, modele TEXT, cout_usd REAL);
 CREATE TABLE IF NOT EXISTS score_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, ts TEXT, usage TEXT,
     global REAL, rang INTEGER, rang_sur INTEGER, dims TEXT, motif TEXT);
@@ -335,4 +339,28 @@ def ia_month_stats() -> dict:
     with conn() as c:
         r = c.execute("SELECT COUNT(*), COALESCE(SUM(cout_usd), 0) FROM ia_extractions WHERE substr(created_at, 1, 7) = ? "
                       "AND statut != 'erreur'", (month,)).fetchone()
-    return {"mois": month, "documents": r[0], "cout_usd": round(r[1], 2)}
+        j = c.execute("SELECT COUNT(*), COALESCE(SUM(cout_usd), 0) FROM ia_journal WHERE substr(ts, 1, 7) = ?", (month,)).fetchone()
+    return {"mois": month, "documents": r[0], "autres_appels": j[0], "cout_usd": round(r[1] + j[1], 2)}
+
+
+def ia_log(kind: str, objet: str, usage: dict, cout: float):
+    with conn() as c:
+        c.execute("INSERT INTO ia_journal (ts, type, objet, entree, sortie, cout_usd) VALUES (?,?,?,?,?,?)",
+                  (now(), kind, objet[:200], usage.get("entree", 0), usage.get("sortie", 0), cout))
+
+
+def ia_note_save(fid: str, usage: str, note: dict, modele: str, cout: float):
+    with conn() as c:
+        c.execute("INSERT INTO ia_notes (friche_id, usage, created_at, note, modele, cout_usd) VALUES (?,?,?,?,?,?)",
+                  (fid, usage, now(), json.dumps(note, ensure_ascii=False), modele, cout))
+
+
+def ia_note_latest(fid: str, usage: str | None = None) -> dict | None:
+    q = "SELECT * FROM ia_notes WHERE friche_id = ?" + (" AND usage = ?" if usage else "") + " ORDER BY created_at DESC, id DESC LIMIT 1"
+    with conn() as c:
+        r = c.execute(q, (fid, usage) if usage else (fid,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["note"] = json.loads(d["note"])
+    return d

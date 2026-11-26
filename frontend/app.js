@@ -691,6 +691,11 @@ function renderContre() {
   $("#main").innerHTML = `
   <div class="section-head"><div><h2>Contre-analyse — la short-list résiste-t-elle ?</h2>
     <p>Durcissez une ou plusieurs hypothèses et voyez quels sites du top ${st.top_n} restent en tête et lesquels s'effondrent. La simulation de Monte-Carlo rejoue ensuite chaque site en tirant ses incertitudes propres : un site bien documenté est plus robuste qu'un site au score égal construit sur des données fragiles.</p></div></div>
+  <div class="card"><h3>Poser une question</h3>
+    <p class="small muted" style="margin:4px 0 8px">Ex. : « Et si la mairie exigeait une zone humide compensatoire ? », « Quel impact d'une subvention de 500 k€ du Fonds Vert ? », « Que devient le top 5 si les prix baissent de 20 % et que les délais doublent ? ». L'IA traduit la question en hypothèses ; c'est le moteur qui calcule.</p>
+    <textarea id="q-text" placeholder="Votre question…" style="min-height:54px">${esc(st.question || "")}</textarea>
+    <div class="row" style="margin-top:6px;justify-content:flex-start"><button class="btn" id="q-go" style="flex:0;white-space:nowrap">Interpréter et lancer</button><span class="small muted" id="q-status" style="flex:1"></span></div>
+    <div id="q-out">${st.qres ? questionHtml(st.qres) : ""}</div></div>
   <div class="card">
     <div class="seg" id="presets">${Object.entries(S.meta.presets).map(([k, l]) => `<button data-p="${k}" class="${st.preset === k ? "on" : ""}">${esc(l)}</button>`).join("")}</div>
     <div class="grid3" style="margin-top:14px">
@@ -711,6 +716,18 @@ function renderContre() {
   </div>
   <div id="scn-out">${st.scn ? scnHtml(st.scn) : ""}</div>
   <div id="mc-out">${st.mc ? mcHtml(st.mc) : ""}</div>`;
+  $("#q-go").onclick = async () => {
+    const q = $("#q-text").value.trim(); if (q.length < 5) { toast("Saisissez une question."); return; }
+    st.question = q; $("#q-go").disabled = true; $("#q-status").textContent = "Interprétation par l'IA puis calcul par le moteur…";
+    try { st.qres = await api("/api/ia/question", { ...ctx(), question: q, perimeter_label: perimeterLabel() }); renderContre(); }
+    catch (e) { $("#q-status").textContent = ""; $("#q-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; $("#q-go").disabled = false; }
+  };
+  const qa = $("#q-apply"); if (qa) qa.onclick = (e) => {
+    e.preventDefault();
+    const hh = st.qres.interpretation.hypotheses;
+    st.hyp = { cout_depollution_mult: 1, cout_demolition_mult: 1, delai_supplementaire_mois: 0, prix_marche_pct: 0, sans_subventions: false, pessimiste: false, usage_force: "", ...hh };
+    st.preset = null; st.top_n = st.qres.interpretation.top_n; renderContre(); toast("Hypothèses reprises dans les curseurs.");
+  };
   $("#presets").onclick = (e) => {
     const b = e.target.closest("button"); if (!b) return;
     st.preset = b.dataset.p;
@@ -737,6 +754,21 @@ function renderContre() {
   bindRows("#main");
   bindContreExports();
 }
+const HYP_LBL = { cout_depollution_mult: (v) => `dépollution ×${fmt(v, 1)}`, cout_demolition_mult: (v) => `démolition ×${fmt(v, 1)}`,
+  delai_supplementaire_mois: (v) => `délais +${fmt(v)} mois`, prix_marche_pct: (v) => `marché ${v > 0 ? "+" : ""}${fmt(v)} %`,
+  sans_subventions: () => "aucune subvention", pessimiste: () => "lecture pessimiste des données incertaines",
+  usage_force: (v) => `usage imposé : ${S.meta.usages[v] || v}`, subvention_eur: (v) => `subvention de ${eur(v)}`,
+  subvention_cible: (v) => (v === "tous" ? "pour tous les sites" : "pour les sites éligibles au Fonds Vert"),
+  compensation_zone_humide: (v) => (v === "tous" ? "zone humide compensatoire exigée partout" : "zone humide compensatoire exigée sur les sites concernés") };
+function questionHtml(r) {
+  const it = r.interpretation;
+  const chips = Object.entries(it.hypotheses).map(([k, v]) => `<span class="chip warn">${esc(HYP_LBL[k] ? HYP_LBL[k](v) : `${k} = ${v}`)}</span>`).join(" ");
+  return `<div class="alert info" style="margin-top:10px"><b>Interprétation :</b> ${esc(it.interpretation)}<div style="margin-top:6px">${chips || "<i>aucune hypothèse modélisable</i>"}</div>
+      ${it.hypotheses_supposees.length ? `<div class="small" style="margin-top:6px"><b>Valeurs supposées :</b> ${it.hypotheses_supposees.map(esc).join(" ; ")}</div>` : ""}
+      ${it.non_modelisable.length ? `<div class="small delta-neg" style="margin-top:4px"><b>Non modélisable par l'outil :</b> ${it.non_modelisable.map(esc).join(" ; ")}</div>` : ""}
+      <div class="small muted" style="margin-top:4px">Coût de l'interprétation : ${fmt(r.cout_usd, 3)} $${r.scenario ? ` · <a href="#" id="q-apply">reprendre ces hypothèses dans les curseurs</a>` : ""}</div></div>
+    ${r.scenario ? scnHtml(r.scenario) : ""}`;
+}
 function hypText(h) {
   const parts = [];
   if (h.cout_depollution_mult && h.cout_depollution_mult !== 1) parts.push(`dépollution ×${h.cout_depollution_mult}`);
@@ -746,6 +778,8 @@ function hypText(h) {
   if (h.sans_subventions) parts.push("sans subventions");
   if (h.pessimiste) parts.push("lecture pessimiste");
   if (h.usage_force) parts.push(`usage forcé : ${S.meta.usages[h.usage_force]}`);
+  if (h.subvention_eur) parts.push(`subvention ${h.subvention_eur} € (${h.subvention_cible || "eligibles_fonds_vert"})`);
+  if (h.compensation_zone_humide && h.compensation_zone_humide !== "non") parts.push(`compensation zone humide : ${h.compensation_zone_humide}`);
   return parts.join(", ") || "aucune";
 }
 function bindContreExports() {

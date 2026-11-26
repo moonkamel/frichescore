@@ -134,6 +134,16 @@ def compute_market(t: Tracker, usage: str, cost: dict, hyp: dict | None = None) 
     alo, ahi = surf * p_fr * 0.6 * acq_k, surf * p_fr * 1.4 * acq_k
     net_lo = vlo - cost["total_haut"] - ahi
     net_hi = vhi - cost["total_bas"] - alo
+    # Contre-analyse : subvention d'un montant donné, pour tous les sites ou seulement les éligibles au Fonds Vert
+    sub = float(hyp.get("subvention_eur") or 0)
+    if sub and not hyp.get("sans_subventions"):
+        cible = hyp.get("subvention_cible", "eligibles_fonds_vert")
+        eligible = (usage in ("logement", "activite", "tertiaire", "equipement") and net_lo < 0
+                    and not t.rec.get("site_extension"))
+        if cible == "tous" or eligible:
+            net_lo += sub
+            net_hi += sub
+            t.add(f"Hypothèse : subvention de {sub / 1000:,.0f} k€".replace(",", " "), min(25.0, sub / surf / 8), None)
     net_mid_m2 = (net_lo + net_hi) / 2 / surf
 
     if usage in MARKET_USAGES:

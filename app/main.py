@@ -374,6 +374,23 @@ def ia_pdf(eid: str):
                         content_disposition_type="inline")
 
 
+class QuestionReq(Ctx):
+    question: str
+    perimeter_label: str = "Tout le référentiel"
+
+
+@app.post("/api/ia/question")
+def ia_question(r: QuestionReq):
+    """Contre-analyse en langage naturel : l'IA traduit la question en hypothèses, le moteur calcule."""
+    from .ia.client import IAError
+    try:
+        return service.ia_question(r.question, r.perimeter.model_dump(), r.perimeter_label, _usage(r.usage), r.weights, r.d5)
+    except IAError as e:
+        raise HTTPException(422, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 class CommunesReq(BaseModel):
     codes_insee: list[str] | None = None
     rafraichir: bool = False

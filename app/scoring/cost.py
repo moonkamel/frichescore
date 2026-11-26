@@ -165,6 +165,12 @@ def compute_cost(t: Tracker, usage: str, hyp: dict | None = None) -> dict:
         f_lo, f_hi = C.COST["foncier_multi_proprio_m2"]
         add("Maîtrise foncière : nombre de propriétaires inconnu", 0, surf * f_hi * 0.5, "nb_proprietaires", "foncier")
 
+    comp = hyp.get("compensation_zone_humide")
+    if comp in ("tous", "concernes") and usage != "renaturation":
+        if comp == "tous" or t.rec.get("zone_humide") in ("avere", "probable"):
+            c_lo, c_hi = C.COST["compensation_zone_humide_m2"]
+            add("Hypothèse : zone humide compensatoire", surf * c_lo, surf * c_hi, "zone_humide", "foncier")
+
     # --------------------------------------------------- portage (délais)
     extra_months = float(hyp.get("delai_supplementaire_mois", 0))
     if extra_months:
