@@ -1,0 +1,14 @@
+services:
+  frichescore:
+    build: .
+    image: frichescore:local
+    ports:
+      - "8000:8000"
+    volumes:
+      - frichescore-data:/data
+      # Décommentez pour éditer le calendrier des financements sans reconstruire l'image :
+      # - ./app/data/funding_windows.json:/app/app/data/funding_windows.json
+    restart: unless-stopped
+
+volumes:
+  frichescore-data:

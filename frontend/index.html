@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FricheScore</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231f6f5c'/><path d='M8 23V9h11M8 16h8' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round'/><circle cx='23' cy='22' r='3' fill='%23f2b134'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">F</span><div><strong>FricheScore</strong><small>Quelles friches méritent une étude en premier, et pourquoi</small></div></div>
+  <nav id="tabs"></nav>
+  <div class="top-actions">
+    <button class="btn ghost" id="btn-csv" title="Exporter le classement courant en CSV">Export CSV</button>
+    <button class="btn" id="btn-report" title="Rapport PDF : short-list, contre-analyse, sources">Rapport de pré-cadrage</button>
+  </div>
+</header>
+<div id="demo-banner" class="banner" hidden>Données de démonstration synthétiques : communes réelles, friches et valeurs fictives. Importez vos données dans l'onglet « Données ».</div>
+<div class="layout">
+  <aside id="side"></aside>
+  <main id="main"><div class="loading">Chargement…</div></main>
+</div>
+<div id="drawer" class="drawer" hidden><div class="drawer-bg" data-close></div><section class="drawer-panel" id="drawer-panel"></section></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
