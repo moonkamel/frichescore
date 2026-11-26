@@ -144,6 +144,17 @@ def heat(perimeter, usage, weights, d5, level):
     return heatmap(ranked, sites, level)
 
 
+def etudes(perimeter, usage, weights, d5, top_n: int = 10, budget_keur: float | None = None) -> dict:
+    """Quelle étude lancer en premier : probabilité qu'une étude change la sélection du top N."""
+    from .scoring.etudes import valeur_information
+    sites = db.load_sites(perimeter)
+    w = _w(weights, d5)
+    ranked = base_ranking(sites, usage, w, d5)
+    stages = {k: v["stage"] for k, v in db.portfolio().items()}
+    ranked = {k: v for k, v in ranked.items() if stages.get(k) != "abandonnee"}
+    return valeur_information(sites, ranked, usage, w, d5, top_n, budget_keur)
+
+
 def zan(perimeter, usage, weights, d5):
     sites = db.load_sites(perimeter)
     ranked = base_ranking(sites, usage, _w(weights, d5), d5)

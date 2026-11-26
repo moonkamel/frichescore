@@ -175,6 +175,18 @@ def heatmap(r: Ctx, level: str = "epci"):
     return service.heat(r.perimeter.model_dump(), _usage(r.usage), r.weights, r.d5, level)
 
 
+class EtudesReq(Ctx):
+    top_n: int = 10
+    budget_keur: float | None = None
+
+
+@app.post("/api/etudes")
+def etudes(r: EtudesReq):
+    """Quelle étude lancer en premier (valeur de l'information pour la décision)."""
+    return service.etudes(r.perimeter.model_dump(), _usage(r.usage), r.weights, r.d5, max(1, min(100, r.top_n)),
+                          r.budget_keur if r.budget_keur and r.budget_keur > 0 else None)
+
+
 @app.post("/api/zan")
 def zan(r: Ctx):
     return service.zan(r.perimeter.model_dump(), _usage(r.usage), r.weights, r.d5)

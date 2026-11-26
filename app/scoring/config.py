@@ -134,3 +134,16 @@ PIEGEUX_D2_MAX = 40  # D2 < 40 => site « piégeux » (coûts cachés probables)
 PEPITE_D2_MIN = 65
 PEPITE_FRICTION_MAX = 30
 PEPITE_CONF_MIN = 0.7
+
+# Coût indicatif des études préalables (k€ HT, fourchette) — module « quelle étude lancer en premier ».
+# Ordres de grandeur à calibrer sur vos marchés d'études.
+ETUDES_COUT_KEUR = {
+    "diag_sol_basol": (20, 60),   # diagnostic sols + eaux souterraines, plan de gestion amorcé
+    "diag_sol": (8, 25),          # étude historique et documentaire + diagnostic ciblé (NF X31-620)
+    "diag_sol_leger": (3, 8),     # étude historique et documentaire seule
+    "visite_bati": (3, 8),
+    "zone_humide": (5, 15),
+    "foncier": (1, 3),
+    "plu": (1, 3),
+    "ppri": (0.5, 2),
+}

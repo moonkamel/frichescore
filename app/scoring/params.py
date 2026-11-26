@@ -74,6 +74,12 @@ def _schema() -> list[dict]:
     add("COST.compensation_zone_humide_m2", g, "Compensation de zone humide (contre-analyse)", RANGE, "€/m² de terrain")
     add("COST.fondations_argiles_fort_m2", g, "Fondations adaptées — aléa argiles fort", RANGE, "€/m² de terrain",
         "Usages bâtis ; moitié pour un aléa moyen")
+    g = "Coût des études préalables"
+    for k, lbl in (("diag_sol_basol", "Diagnostic de pollution — site BASOL/SIS"), ("diag_sol", "Étude historique + diagnostic de sol ciblé"),
+                   ("diag_sol_leger", "Étude historique et documentaire"), ("visite_bati", "Visite et diagnostic du bâti"),
+                   ("zone_humide", "Délimitation des zones humides"), ("foncier", "Étude foncière"),
+                   ("plu", "Analyse réglementaire PLU(i)"), ("ppri", "Vérification du zonage PPRi")):
+        add(f"ETUDES_COUT_KEUR.{k}", g, lbl, RANGE, "k€ HT", "Sert au classement des études par rapport coût / utilité")
     g = "Viabilisation / VRD par usage"
     for u in C.COST["viabilisation"]:
         add(f"COST.viabilisation.{u}", g, USAGE_LBL[u], RANGE, "€/m² de terrain")

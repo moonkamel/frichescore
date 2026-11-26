@@ -745,7 +745,19 @@ function renderContre() {
     </div>
   </div>
   <div id="scn-out">${st.scn ? scnHtml(st.scn) : ""}</div>
-  <div id="mc-out">${st.mc ? mcHtml(st.mc) : ""}</div>`;
+  <div id="mc-out">${st.mc ? mcHtml(st.mc) : ""}</div>
+  <div class="card"><h3>Quelle étude lancer en premier ?</h3>
+    <p class="small muted" style="margin:4px 0 8px">Pour chaque site proche de la limite du top ${st.top_n} et chaque étude préalable possible (diagnostic de sol, visite du bâti, zones humides, foncier, PLU, PPRi), l'outil simule les résultats plausibles de l'étude et calcule la <b>probabilité qu'elle change la sélection</b> : faire entrer un site dans le top ou l'en faire sortir. Une étude qui ne peut rien changer au classement n'est pas prioritaire pour décider. Les probabilités a priori sont affichées ; les coûts d'études se règlent dans Paramètres.</p>
+    <div class="row" style="justify-content:flex-start;align-items:center"><label class="small" style="flex:0;white-space:nowrap">Budget d'études (k€)</label><input type="number" id="et-budget" value="${st.budget ?? 50}" min="0" step="5" style="width:90px;flex:0 0 90px">
+      <button class="btn" id="et-go" style="flex:0;white-space:nowrap">Classer les études</button></div>
+    <div id="et-out">${st.etudes ? etudesHtml(st.etudes) : ""}</div></div>`;
+  $("#et-go").onclick = async () => {
+    st.budget = +$("#et-budget").value || 0;
+    $("#et-out").innerHTML = `<div class="loading" style="margin-top:8px">Simulation des études…</div>`;
+    try { st.etudes = await api("/api/etudes", { ...ctx(), top_n: st.top_n, budget_keur: st.budget }); $("#et-out").innerHTML = etudesHtml(st.etudes); bindEtudes(); }
+    catch (e) { $("#et-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+  };
+  bindEtudes();
   $("#q-go").onclick = async () => {
     const q = $("#q-text").value.trim(); if (q.length < 5) { toast("Saisissez une question."); return; }
     st.question = q; $("#q-go").disabled = true; $("#q-status").textContent = "Interprétation par l'IA puis calcul par le moteur…";
@@ -783,6 +795,31 @@ function renderContre() {
   };
   bindRows("#main");
   bindContreExports();
+}
+function keur(r) { return `${fmt(r[0], r[0] < 10 ? 1 : 0)}–${fmt(r[1], r[1] < 10 ? 1 : 0)} k€`; }
+function etudesHtml(r) {
+  if (r.message) return `<div class="alert info" style="margin-top:8px">${esc(r.message)}</div>`;
+  const utiles = r.etudes.filter((e) => e.p_changement > 0), inutiles = r.etudes.length - utiles.length;
+  const row = (e, i) => `<tr><td><a href="#" data-et-site="${esc(e.site)}" data-u="${esc(e.usage)}">${esc(e.nom || e.site)}</a><div class="small muted">${esc(e.commune || "")} · rang ${e.rang} · ${fmt(e.score)}</div></td>
+      <td>${esc(e.etude)}<div class="small muted">${esc(e.hypothese)}</div></td><td class="num" style="white-space:nowrap">${keur(e.cout_keur)}</td>
+      <td class="num"><b>${Math.round(e.p_changement * 100)} %</b><div class="small muted">${e.dans_top ? "sortie du top" : "entrée dans le top"}</div></td>
+      <td class="num">${fmt(e.fourchette_score[0])} à ${fmt(e.fourchette_score[1])}</td>
+      <td><button class="btn sm sec" data-et-detail="${i}">Résultats</button></td></tr>`;
+  return `${r.selection.length ? `<div class="alert info" style="margin-top:10px"><b>Programme conseillé avec ${fmt(r.budget_keur)} k€</b> (coût moyen estimé ${fmt(r.cout_selection_keur, 1)} k€) :
+      <ol style="margin:6px 0 0 18px;padding:0">${r.selection.map((s) => `<li>${esc(s.etude)} — <b>${esc(s.nom)}</b> <span class="small muted">(${keur(s.cout_keur)}, ${Math.round(s.p_changement * 100)} % de chances de faire basculer la sélection)</span></li>`).join("")}</ol>
+      <div class="small" style="margin-top:6px">Les études sont choisies par probabilité de bascule rapportée à leur coût. Cumulées, elles peuvent modifier environ <b>${fmt(r.decisions_changees_attendues, 1)}</b> place(s) du top ${r.top_n} : autant de sites mal classés repérés avant d'engager les études lourdes.</div></div>` : ""}
+    <p class="small muted" style="margin-top:8px">Seuil du top ${r.top_n} : ${fmt(r.seuil, 1)} points · ${r.sites_examines} site(s) proches du seuil examinés · ${utiles.length} étude(s) pouvant changer la sélection${inutiles ? `, ${inutiles} sans effet sur la sélection` : ""}.</p>
+    ${utiles.length ? `<table class="fv"><thead><tr><th>Site</th><th>Étude</th><th>Coût</th><th>Proba. de changer la décision</th><th>Score après étude</th><th></th></tr></thead><tbody>${utiles.slice(0, 15).map((e) => row(e, r.etudes.indexOf(e))).join("")}</tbody></table>${utiles.length > 15 ? `<details><summary class="small">${utiles.length - 15} autre(s) étude(s)</summary><table class="fv"><tbody>${utiles.slice(15).map((e) => row(e, r.etudes.indexOf(e))).join("")}</tbody></table></details>` : ""}` : `<div class="alert info">Aucune étude ne peut changer la sélection : le top ${r.top_n} est robuste aux incertitudes que ces études lèveraient.</div>`}
+    <div id="et-detail"></div>`;
+}
+function bindEtudes() {
+  document.querySelectorAll("[data-et-site]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); openDrawer(a.dataset.etSite, a.dataset.u); }));
+  document.querySelectorAll("[data-et-detail]").forEach((b) => (b.onclick = () => {
+    const e = S.stress.etudes.etudes[+b.dataset.etDetail];
+    $("#et-detail").innerHTML = `<div class="card" style="margin-top:8px"><h4>${esc(e.etude)} — ${esc(e.nom)}</h4><p class="small muted">Score actuel ${fmt(e.score, 1)} (rang ${e.rang}), seuil du top ${S.stress.etudes.top_n} : ${fmt(S.stress.etudes.seuil, 1)}. Une étude lève aussi l'incertitude de l'indicateur : la pénalité de confiance diminue, ce qui peut suffire à faire entrer un site.</p>
+      <table class="fv"><thead><tr><th>Résultat possible</th><th>Probabilité a priori</th><th>Score</th><th>Usage</th><th>Décision</th></tr></thead><tbody>
+      ${e.resultats.map((x) => `<tr><td>${esc(x.resultat)}</td><td class="num">${Math.round(x.probabilite * 100)} %</td><td class="num"><b>${fmt(x.score, 1)}</b></td><td>${esc(S.meta.usages[x.usage] || x.usage)}</td><td>${x.change_decision ? `<span class="chip warn">${e.dans_top ? "sort du top" : "entre dans le top"}</span>` : `<span class="chip ok">inchangée</span>`}</td></tr>`).join("")}</tbody></table></div>`;
+  }));
 }
 const HYP_LBL = { cout_depollution_mult: (v) => `dépollution ×${fmt(v, 1)}`, cout_demolition_mult: (v) => `démolition ×${fmt(v, 1)}`,
   delai_supplementaire_mois: (v) => `délais +${fmt(v)} mois`, prix_marche_pct: (v) => `marché ${v > 0 ? "+" : ""}${fmt(v)} %`,

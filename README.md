@@ -136,6 +136,15 @@ ajoute un surcoût de fondations — deux paramètres réglables.
 - Modèle : `GET /api/import/modele.csv` ; dictionnaire des colonnes : `GET /api/import/dictionnaire.csv`.
 - Provenance par colonne : ajouter `<colonne>__source`, `<colonne>__date`, `<colonne>__confiance`.
 
+### Quelle étude lancer en premier ?
+
+Onglet **Contre-analyse**. Pour chaque site proche de la limite du top N et chaque étude préalable possible (diagnostic
+de sol, visite du bâti, délimitation des zones humides, étude foncière, analyse du PLU, zonage PPRi), l'outil simule les
+résultats plausibles de l'étude avec des probabilités a priori affichées (un site BASOL a plus de chances de révéler une
+pollution forte qu'un site sans signal), recalcule le score et mesure la **probabilité que l'étude change la sélection**.
+Avec un budget d'études, il propose le programme qui maximise les bascules attendues par euro dépensé. Les coûts des
+études se règlent dans Paramètres ; les probabilités a priori sont des hypothèses de travail, pas des statistiques.
+
 ### Calendrier des financements
 
 Éditable dans **Horloge ZAN → Modifier le calendrier** (formulaire ou JSON avancé, validé avant enregistrement).
