@@ -1015,7 +1015,7 @@ async function renderDonnees() {
   <div class="card"><h3>Connecteurs Cartofriches · Géorisques · DVF</h3>
     <p class="small muted">Les connecteurs interrogent les API publiques depuis la machine qui exécute FricheScore. Commencez par <b>tester la connexion</b> : l'appel est réel et le résultat brut (ou l'erreur exacte) s'affiche. En cas d'échec, l'outil n'invente aucune donnée.</p>
     <div class="grid3" style="align-items:end">
-      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option></select></div>
+      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option><option value="communes">Indicateurs communaux (API Géo, zonage ABC, LOVAC, SITADEL, ENAF)</option></select></div>
       <div><label class="small muted">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
       <div class="row"><div><label class="small muted">Latitude</label><input type="number" id="ct-lat" value="50.6329" step="any"></div><div><label class="small muted">Longitude</label><input type="number" id="ct-lon" value="3.0586" step="any"></div></div>
       <div style="grid-column:1 / 3"><label class="small muted">Adresse de l'API (modifiable si elle a changé)</label><input type="text" id="ct-url"></div>
@@ -1026,8 +1026,14 @@ async function renderDonnees() {
     <div class="row" style="margin-top:6px"><input type="text" id="cf-codes" placeholder="Codes INSEE séparés par des virgules (ex. 59512, 59599)">
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-geo" checked> Géorisques</label>
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-dvf" checked> DVF</label>
+      <label class="toggle" style="flex:0;white-space:nowrap" title="Population, zonage ABC, vacance, permis de construire, consommation d'espaces"><input type="checkbox" id="cf-com" checked> Indicateurs communaux</label>
       <button class="btn" id="cf-go" style="flex:0;white-space:nowrap">Importer</button></div>
-    <div id="cf-out" class="small" style="margin-top:6px"></div></div>
+    <div id="cf-out" class="small" style="margin-top:6px"></div>
+    <h4 style="margin-top:16px">Indicateurs communaux des friches réelles</h4>
+    <p class="small muted" style="margin:4px 0 6px">Population et mairie (API Géo), zonage ABC, vacance des logements (LOVAC), logements autorisés (SITADEL) et consommation d'espaces (Cerema). Les fichiers nationaux sont téléchargés une fois puis gardés en cache 30 jours. À relancer après un import CSV ou pour rafraîchir les données.</p>
+    <div class="row" style="justify-content:flex-start"><button class="btn sec" id="com-go" style="flex:0;white-space:nowrap">Mettre à jour les indicateurs communaux</button>
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="com-refresh"> retélécharger les fichiers nationaux</label></div>
+    <div id="com-out" class="small" style="margin-top:6px"></div></div>
   <div class="card doc"><h3>Méthode</h3>
     <p>Chaque friche reçoit une note de 0 à 100 sur cinq dimensions, calculées <b>séparément pour chaque usage</b> (${Object.values(m.usages).join(", ").toLowerCase()}).</p>
     <ul>
@@ -1060,12 +1066,16 @@ async function renderDonnees() {
     } catch (e) { $("#imp-out").innerHTML = `<div class="card alert bad">Erreur : ${esc(e.message)}</div>`; }
   };
   $("#imp-check").onclick = () => doImport(true);
+  bindCommunes();
   $("#imp-go").onclick = () => doImport(false);
   const urls = await api("/api/connecteurs").catch(() => ({}));
+  urls.communes = "API Géo · data.gouv.fr · Cerema (adresses résolues automatiquement)";
   const setUrl = () => { $("#ct-url").value = urls[$("#ct-src").value] || ""; };
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {
-    $("#ct-out").innerHTML = `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
+    $("#ct-out").innerHTML = $("#ct-src").value === "communes"
+      ? `<div class="loading">Interrogation des 5 sources… Le premier test télécharge les fichiers nationaux (zonage ABC, LOVAC, SITADEL) : comptez jusqu'à quelques minutes, les tests suivants utilisent le cache.</div>`
+      : `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
     try {
       const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });
       S.lastConnTest = r;
@@ -1074,6 +1084,7 @@ async function renderDonnees() {
         ${r.diagnostic_reseau ? netDiag(r.diagnostic_reseau) : ""}
         ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
         ${r.champs ? champsHtml(r.champs) : ""}
+        ${r.detail ? `<details open style="margin-top:8px"><summary>Détail par source</summary>${Object.entries(r.detail).map(([k, d]) => `<div class="alert ${d.ok ? "info" : "bad"}" style="margin:6px 0"><b>${d.ok ? "✓" : "✗"} ${esc(k)}</b>${d.valeur !== undefined && d.valeur !== null ? ` — valeur : <b>${esc(d.valeur)}</b>` : ""}${d.valeur_ha != null ? ` — ${esc(d.valeur_ha)} ha` : ""}${d.valeurs ? ` — ${esc(JSON.stringify(d.valeurs))}` : ""}${d.erreur ? `<br>${esc(d.erreur)}` : ""}${d.ressource ? `<br><span class="small">Fichier : « ${esc(d.ressource.titre || "")} » (${esc(d.ressource.date || "")})</span>` : ""}${d.detection ? `<br><span class="small">Détection : ${esc(JSON.stringify(d.detection))}</span>` : ""}</div>`).join("")}</details>` : ""}
         ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;
       const txt = JSON.stringify(r, null, 1);
       $("#ct-copy").onclick = async () => {
@@ -1088,7 +1099,7 @@ async function renderDonnees() {
     $("#cf-go").disabled = true;
     const out = $("#cf-out");
     try {
-      const job = await api("/api/ingest/cartofriches", { codes_insee: codes, georisques: $("#cf-geo").checked, dvf: $("#cf-dvf").checked });
+      const job = await api("/api/ingest/cartofriches", { codes_insee: codes, georisques: $("#cf-geo").checked, dvf: $("#cf-dvf").checked, communes: $("#cf-com").checked });
       let st = job;
       while (st.etat === "en_cours") {
         const pct = st.total ? Math.round((100 * st.fait) / st.total) : 0;
@@ -1103,13 +1114,42 @@ async function renderDonnees() {
         const r = st.rapport;
         S.meta = await api("/api/meta"); await loadSites(true); renderSide();
         const o = $("#cf-out") || out;
-        o.innerHTML = `<div class="alert info"><b>${r.importees} friche(s) importée(s)</b> en ${st.duree_s} s, ${r.communes_dvf} commune(s) enrichie(s) avec DVF. Elles sont visibles dans l'onglet Classement.</div>${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 30).map(esc).join("<br>")}${r.erreurs.length > 30 ? `<br>… et ${r.erreurs.length - 30} autre(s)` : ""}</div>` : ""}${r.avertissements.length ? `<div class="alert">${r.avertissements.slice(0, 10).map(esc).join("<br>")}</div>` : ""}`;
+        o.innerHTML = `<div class="alert info"><b>${r.importees} friche(s) importée(s)</b> en ${st.duree_s} s, ${r.communes_dvf} commune(s) enrichie(s) avec DVF.${r.indicateurs_communaux ? " Indicateurs communaux : " + esc(Object.entries(r.indicateurs_communaux).map(([k, n]) => `${catLabel(k)} (${n})`).join(", ")) + "." : ""} Elles sont visibles dans l'onglet Classement.</div>${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 30).map(esc).join("<br>")}${r.erreurs.length > 30 ? `<br>… et ${r.erreurs.length - 30} autre(s)` : ""}</div>` : ""}${r.avertissements.length ? `<div class="alert">${r.avertissements.slice(0, 10).map(esc).join("<br>")}</div>` : ""}`;
         toast(`Import terminé : ${r.importees} friche(s).`, 5000);
       } else if (st.etat === "erreur") {
         out.innerHTML = `<div class="alert bad">L'import a échoué : ${esc(st.erreur)}</div>`;
       }
     } catch (e) { out.textContent = "Erreur : " + e.message; }
     finally { const b = $("#cf-go"); if (b) b.disabled = false; }
+  };
+}
+async function pollJob(job, out) {
+  let st = job;
+  while (st.etat === "en_cours") {
+    const pct = st.total ? Math.round((100 * st.fait) / st.total) : 0;
+    out.innerHTML = `<div style="margin:6px 0"><b>${esc(st.etape || "Démarrage…")}</b> ${st.total ? `— ${st.fait} / ${st.total}` : ""}
+      <div class="bar" style="height:10px;margin-top:6px;max-width:520px"><i style="width:${pct}%;background:var(--accent)"></i></div></div>`;
+    await new Promise((res) => setTimeout(res, 1000));
+    st = await api(`/api/ingest/jobs/${job.id}`);
+  }
+  return st;
+}
+function bindCommunes() {
+  const b = $("#com-go"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true;
+    const out = $("#com-out");
+    try {
+      const st = await pollJob(await api("/api/communes/enrichir", { rafraichir: $("#com-refresh").checked }), out);
+      if (st.etat === "termine") {
+        const r = st.rapport;
+        S.meta = await api("/api/meta"); await loadSites(true); renderSide();
+        out.innerHTML = `<div class="alert info"><b>${r.communes} commune(s) mise(s) à jour</b> en ${st.duree_s} s. ${Object.entries(r.indicateurs).map(([k, n]) => `${esc(catLabel(k))} : ${n}`).join(" · ") || "Aucun indicateur obtenu."}</div>
+          ${Object.entries(r.fichiers || {}).map(([k, f]) => `<div class="small muted">${esc(k)} : « ${esc(f.titre || "")} » (${esc(f.date || "")}) — ${f.communes_trouvees} commune(s) trouvée(s)</div>`).join("")}
+          ${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 20).map(esc).join("<br>")}</div>` : ""}`;
+      } else out.innerHTML = `<div class="alert bad">Échec : ${esc(st.erreur)}</div>`;
+    } catch (e) { out.innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
+    finally { b.disabled = false; }
   };
 }
 function importReport(r, fname) {

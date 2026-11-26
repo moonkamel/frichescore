@@ -154,3 +154,35 @@ def test_import_perimetre_en_tache_de_fond(c, monkeypatch):
     s = c.post("/api/scores", json={"type": "ids", "values": ["CF-59350_0", "CF-59512_11"]}).json()["sites"]
     assert len(s) == 2 and all(x["evaluable"] for x in s)
     assert c.get("/api/ingest/jobs/inconnu").status_code == 404
+
+
+def test_indicateurs_communaux_et_distance(c, monkeypatch):
+    from app import db, service
+    from app.ingest import territoire as T
+    from app.scoring.record import Provenance, Record
+    r = Record()
+    p = Provenance("API Cartofriches (Cerema)", "2026-11-26", "moyen")
+    for k, v in {"id": "CF-COM-1", "nom": "Réelle", "code_insee": "59009", "departement": "59", "surface_m2": 5000,
+                 "lat": 50.62, "lon": 3.13, "activite_passee": "BASIAS"}.items():
+        r.set(k, v, p)
+    db.upsert_friche(r, "cartofriches")
+
+    def fake(codes, existing=None, refresh=False, progress=None):
+        out = {}
+        for code in codes:
+            rec = Record()
+            q = Provenance("API Géo", "2026-11-26", "eleve")
+            rec.set("population", 60000, q)
+            rec.set("epci", "Métropole Européenne de Lille", q)
+            rec.set("centre_lat", 50.6235, q)
+            rec.set("centre_lon", 3.1468, q)
+            rec.set("zonage_abc", "B1", Provenance("Zonage ABC", "2026-06-26", "eleve"))
+            out[code] = rec
+        return out, {"communes": len(codes), "indicateurs": {"population": len(codes)}, "erreurs": [], "fichiers": {}}
+    monkeypatch.setattr(T, "enrich_communes", fake)
+    rep = service.enrich_communes(["59009"])
+    assert rep["indicateurs"]["population"] == 1
+    site = db.load_sites({"type": "ids", "values": ["CF-COM-1"]})["CF-COM-1"]
+    assert site.get("zonage_abc") == "B1" and site.get("epci") == "Métropole Européenne de Lille"
+    assert 1.0 < site.get("distance_centre_km") < 1.5 and "mairie" in site.prov["distance_centre_km"].source
+    assert db.load_sites({"type": "epci", "values": ["Métropole Européenne de Lille"]}).get("CF-COM-1") is not None

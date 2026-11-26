@@ -80,7 +80,10 @@ et doivent être calibrées sur vos propres opérations.
 | Cartofriches (API Données foncières Cerema) | Inventaire de base | Connecteur API + import CSV |
 | Géorisques : CASIAS (ex-BASIAS), instructions SSP (ex-BASOL), SIS, ICPE | Coût et friction | Connecteur API |
 | DVF géolocalisé | Attractivité | Connecteur (fichiers geo-dvf par commune) |
-| Cadastre / fichiers fonciers, SITADEL, INSEE/LOVAC, PLU(i) (GPU), portail de l'artificialisation, PVGIS… | Autres dimensions | Import CSV (une colonne par indicateur) |
+| API Géo (geo.api.gouv.fr) | Population, EPCI, mairie → distance au centre de chaque friche | Connecteur API |
+| Zonage ABC, LOVAC (vacance), SITADEL (logements autorisés) — data.gouv.fr | Potentiel logement, marché | Fichiers nationaux résolus via l'API data.gouv.fr, mis en cache 30 jours |
+| Consommation d'ENAF 2011-2021 (Cerema, `/indicateurs/conso_espace`) | Impact ZAN | Connecteur API |
+| Cadastre / fichiers fonciers, PLU(i) (GPU), PVGIS… | Autres dimensions | Import CSV (une colonne par indicateur) |
 
 ### Connecteurs
 
@@ -95,6 +98,16 @@ reste « non renseigné » (et pèse sur la confiance), il n'est jamais mis à �
 Le parsing est couvert par des tests avec des réponses simulées calquées sur les formats publics
 (`tests/test_connectors.py`, `tests/fixtures/`). **Les connecteurs n'ont pas encore été validés contre les API
 réelles** (accès réseau bloqué pendant le développement) : c'est la première chose à faire avec le bouton de test.
+
+### Indicateurs communaux
+
+Calculés automatiquement à l'import d'un périmètre, ou via **Données → Mettre à jour les indicateurs communaux**
+(pour les communes portant des friches réelles, par exemple après un import CSV). Les fichiers nationaux ne sont
+pas désignés par une adresse figée : l'API de data.gouv.fr fournit la ressource la plus récente de chaque jeu de
+données, téléchargée une fois et mise en cache (`<dossier de la base>/cache/`, 30 jours, `FRICHESCORE_CACHE_JOURS`).
+Les colonnes sont détectées de façon tolérante ; la source « Indicateurs communaux » du test de connexion montre le
+fichier retenu, les colonnes détectées et la valeur obtenue pour une commune. Une friche réelle n'hérite jamais
+d'indicateurs de démonstration.
 
 ### Import CSV
 

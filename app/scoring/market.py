@@ -60,9 +60,12 @@ def compute_market(t: Tracker, usage: str, cost: dict, hyp: dict | None = None) 
 
     if usage in ("logement", "tertiaire"):
         prix = float(t.read("prix_m2_logement", 2500, 1.5)) * (1 + shock)
-        ref = float(t.read("prix_m2_dept", 2500, 0.5))
+        # Sans prix de référence départemental, la comparaison est omise plutôt que faite contre un défaut arbitraire
+        ref = float(t.read("prix_m2_dept", 0, 0.5)) if t.rec.has("prix_m2_dept") else 0
         r = prix / ref if ref else 1
-        if r > 1.2:
+        if not ref:
+            pass
+        elif r > 1.2:
             s += t.add(f"Prix DVF {r:.0%} de la référence départementale", 12, "prix_m2_logement")
         elif r > 1.0:
             s += t.add(f"Prix DVF supérieurs à la moyenne départementale ({r:.0%})", 6, "prix_m2_logement")

@@ -164,9 +164,37 @@ def load_sites(perimeter: dict | None = None) -> dict[str, Record]:
             merged = f
         if r["id"] in field:
             merged = merged.merged_with(field[r["id"]])
+        _derive_distance(merged)
         merged.values["_origine"] = r["origine"]
         out[r["id"]] = merged
     return out
+
+
+def _derive_distance(rec: Record) -> None:
+    """Distance à la mairie calculée si la friche ne la renseigne pas et que la commune la connaît."""
+    if rec.has("distance_centre_km") or not (rec.has("lat") and rec.has("lon") and rec.has("centre_lat") and rec.has("centre_lon")):
+        return
+    from .ingest.territoire import distance_km
+    from .scoring.record import Provenance
+    d = distance_km(rec.get("lat"), rec.get("lon"), rec.get("centre_lat"), rec.get("centre_lon"))
+    p = rec.prov.get("centre_lat")
+    rec.set("distance_centre_km", round(d, 2), Provenance("Calcul : distance à vol d'oiseau à la mairie (API Géo)",
+                                                          p.date if p else None, "eleve", "coordonnées friche × mairie"))
+
+
+def update_friche_epci(code_insee: str, epci: str):
+    """Renseigne l'EPCI des friches d'une commune qui ne l'ont pas (Cartofriches ne le fournit pas)."""
+    with conn() as c:
+        rows = c.execute("SELECT id, data FROM friches WHERE code_insee = ? AND (epci IS NULL OR epci = '')", (code_insee,)).fetchall()
+        for r in rows:
+            d = json.loads(r["data"])
+            d["values"]["epci"] = epci
+            c.execute("UPDATE friches SET epci = ?, data = ? WHERE id = ?", (epci, json.dumps(d, ensure_ascii=False), r["id"]))
+
+
+def real_friche_communes() -> list[str]:
+    with conn() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT code_insee FROM friches WHERE origine NOT LIKE 'demo%' AND code_insee IS NOT NULL")]
 
 
 def get_commune(code: str) -> Record | None:

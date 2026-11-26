@@ -262,21 +262,17 @@ class CartoReq(BaseModel):
     codes_insee: list[str]
     georisques: bool = True
     dvf: bool = True
+    communes: bool = True
 
 
 _JOBS: dict[str, dict] = {}
 
 
-@app.post("/api/ingest/cartofriches")
-def ingest_cartofriches(r: CartoReq):
-    """Lance l'import en tâche de fond (Cartofriches, puis Géorisques et DVF) et renvoie
-    un identifiant de suivi : GET /api/ingest/jobs/{id}. Les échecs sont rapportés sans interrompre l'import."""
+def _start_job(fn) -> dict:
+    """Exécute `fn(progress)` en tâche de fond ; suivi via GET /api/ingest/jobs/{id}."""
     import threading
     import time as _t
     import uuid
-    codes = [c.strip() for c in r.codes_insee if c.strip()]
-    if not codes:
-        raise HTTPException(400, "aucun code INSEE")
     jid = uuid.uuid4().hex[:12]
     job = {"id": jid, "etat": "en_cours", "etape": "Démarrage", "fait": 0, "total": 0, "rapport": None,
            "erreur": None, "debut": _t.time(), "duree_s": None}
@@ -287,7 +283,7 @@ def ingest_cartofriches(r: CartoReq):
 
     def run():
         try:
-            job["rapport"] = service.ingest_cartofriches(codes, r.georisques, r.dvf, prog)
+            job["rapport"] = fn(prog)
             job["etat"] = "termine"
         except Exception as e:  # noqa: BLE001
             job.update(etat="erreur", erreur=f"{type(e).__name__} : {e}")
@@ -295,6 +291,27 @@ def ingest_cartofriches(r: CartoReq):
 
     threading.Thread(target=run, daemon=True).start()
     return job
+
+
+@app.post("/api/ingest/cartofriches")
+def ingest_cartofriches(r: CartoReq):
+    """Lance l'import en tâche de fond (Cartofriches, Géorisques, DVF, indicateurs communaux)."""
+    codes = [c.strip() for c in r.codes_insee if c.strip()]
+    if not codes:
+        raise HTTPException(400, "aucun code INSEE")
+    return _start_job(lambda prog: service.ingest_cartofriches(codes, r.georisques, r.dvf, prog, r.communes))
+
+
+class CommunesReq(BaseModel):
+    codes_insee: list[str] | None = None
+    rafraichir: bool = False
+
+
+@app.post("/api/communes/enrichir")
+def communes_enrich(r: CommunesReq):
+    """Met à jour les indicateurs communaux réels (toutes les communes portant des friches réelles par défaut)."""
+    codes = [c.strip() for c in (r.codes_insee or []) if c.strip()] or None
+    return _start_job(lambda prog: service.enrich_communes(codes, prog, r.rafraichir))
 
 
 @app.get("/api/ingest/jobs/{jid}")
@@ -315,8 +332,11 @@ class ConnTestReq(BaseModel):
 
 @app.post("/api/connecteurs/test")
 def connector_test(r: ConnTestReq):
-    if r.source not in ("cartofriches", "georisques", "dvf"):
-        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf)")
+    if r.source not in ("cartofriches", "georisques", "dvf", "communes"):
+        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf, communes)")
+    if r.source == "communes":
+        from .ingest import territoire
+        return territoire.test_communes(r.code_insee.strip())
     if r.base_url and not r.base_url.startswith(("http://", "https://")):
         raise HTTPException(400, "l'adresse doit commencer par http:// ou https://")
     t = max(5.0, min(180.0, r.timeout)) if r.timeout else None

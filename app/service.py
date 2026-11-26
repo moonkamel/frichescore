@@ -515,7 +515,29 @@ def calendar_save(data: dict) -> list[str]:
 
 
 # -------------------------------------------------------------- connecteurs
-def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True, progress=None) -> dict:
+def enrich_communes(codes: list[str] | None = None, progress=None, refresh: bool = False) -> dict:
+    """Indicateurs communaux réels (API Géo, zonage ABC, LOVAC, SITADEL, ENAF) pour les communes
+    données, ou pour toutes les communes portant des friches réelles."""
+    from .ingest import territoire
+    codes = codes or db.real_friche_communes()
+    if not codes:
+        return {"communes": 0, "indicateurs": {}, "fichiers": {},
+                "erreurs": ["Aucune friche réelle dans la base : importez d'abord un périmètre ou un fichier CSV."]}
+    existing = {c: db.get_commune(c) for c in codes}
+    recs, rep = territoire.enrich_communes(codes, {k: v for k, v in existing.items() if v}, refresh, progress)
+    for c, rec in recs.items():
+        if not rec.values:
+            continue
+        rec.values["code_insee"] = c
+        base = existing.get(c)
+        db.upsert_commune(c, base.merged_with(rec) if base else rec)
+        if rec.has("epci"):
+            db.update_friche_epci(c, rec.get("epci"))
+    return rep
+
+
+def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True, progress=None,
+                        communes: bool = True) -> dict:
     """Import d'un périmètre. `progress(etape, fait, total)` est appelé au fil de l'eau.
     Les bases Géorisques sont interrogées en parallèle (6 friches à la fois)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -567,4 +589,9 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
                 rec = connectors.dvf_commune_record(code, ind)
                 db.upsert_commune(code, existing.merged_with(rec) if existing else rec)
                 report["communes_dvf"] += 1
+    if communes and all_recs:
+        found = sorted({r.get("code_insee") for r in all_recs if r.get("code_insee")})
+        rep = enrich_communes(found, progress)
+        report["indicateurs_communaux"] = rep["indicateurs"]
+        report["erreurs"] += rep["erreurs"]
     return report

@@ -58,6 +58,8 @@ CATALOG: dict[str, tuple] = {
                      ["habitat", "mixte", "activite", "equipement", "naturelle"]),
     "servitudes_count": ("Servitudes d'utilité publique", "int", "Géoportail de l'urbanisme (SUP)", "moyen", None),
     # Desserte / localisation
+    "centre_lat": ("Latitude de la mairie", "float", "API Géo", "eleve", None),
+    "centre_lon": ("Longitude de la mairie", "float", "API Géo", "eleve", None),
     "distance_centre_km": ("Distance au centre-ville (km)", "float", "Calcul géographique", "eleve", None),
     "distance_gare_km": ("Distance à la gare (km)", "float", "SNCF open data", "eleve", None),
     "desserte_tc": ("Desserte transports collectifs", "enum", "GTFS / transport.data.gouv.fr", "moyen", ["forte", "moyenne", "faible"]),
