@@ -174,8 +174,7 @@ def _maj_apis(r: dict, progress) -> dict:
     from . import service
     from .ingest import territoire
     erreurs: list[str] = []
-    suivies = [x for x, o in _communes_par_origine().items() if o == "cartofriches"]
-    codes = set(suivies)
+    codes = set(_communes_cartofriches())
     for dep in r["departements"]:
         if progress:
             progress(f"Liste des communes du département {dep}", 0, 1)
@@ -208,10 +207,11 @@ def _maj_apis(r: dict, progress) -> dict:
             "erreurs": erreurs + rep["erreurs"]}
 
 
-def _communes_par_origine() -> dict[str, str]:
+def _communes_cartofriches() -> list[str]:
+    """Communes portant au moins une friche Cartofriches (même si elles portent aussi des friches CSV)."""
     with db.conn() as c:
-        return {row[0]: row[1] for row in c.execute(
-            "SELECT code_insee, origine FROM friches WHERE origine NOT LIKE 'demo%' AND code_insee IS NOT NULL")}
+        return [row[0] for row in c.execute(
+            "SELECT DISTINCT code_insee FROM friches WHERE origine = 'cartofriches' AND code_insee IS NOT NULL")]
 
 
 def _maj_packs(r: dict, progress) -> dict:
