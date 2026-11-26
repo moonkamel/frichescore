@@ -277,6 +277,7 @@ class ConnTestReq(BaseModel):
     lat: float = 50.6329
     lon: float = 3.0586
     base_url: str | None = None
+    timeout: float | None = None
 
 
 @app.post("/api/connecteurs/test")
@@ -285,7 +286,8 @@ def connector_test(r: ConnTestReq):
         raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf)")
     if r.base_url and not r.base_url.startswith(("http://", "https://")):
         raise HTTPException(400, "l'adresse doit commencer par http:// ou https://")
-    return connectors.test_connection(r.source, r.code_insee.strip(), r.lat, r.lon, r.base_url or None)
+    t = max(5.0, min(180.0, r.timeout)) if r.timeout else None
+    return connectors.test_connection(r.source, r.code_insee.strip(), r.lat, r.lon, r.base_url or None, t)
 
 
 @app.get("/api/connecteurs")

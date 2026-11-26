@@ -1018,7 +1018,7 @@ async function renderDonnees() {
       <div><label class="small muted">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
       <div class="row"><div><label class="small muted">Latitude</label><input type="number" id="ct-lat" value="50.6329" step="any"></div><div><label class="small muted">Longitude</label><input type="number" id="ct-lon" value="3.0586" step="any"></div></div>
       <div style="grid-column:1 / 3"><label class="small muted">Adresse de l'API (modifiable si elle a changé)</label><input type="text" id="ct-url"></div>
-      <div><button class="btn" id="ct-go" style="width:100%">Tester la connexion</button></div>
+      <div class="row" style="align-items:end"><div style="max-width:110px"><label class="small muted">Délai max (s)</label><input type="number" id="ct-timeout" min="5" max="180" value="60"></div><button class="btn" id="ct-go" style="white-space:nowrap">Tester la connexion</button></div>
     </div>
     <div id="ct-out" style="margin-top:10px"></div>
     <h4 style="margin-top:16px">Importer un périmètre</h4>
@@ -1064,9 +1064,9 @@ async function renderDonnees() {
   const setUrl = () => { $("#ct-url").value = urls[$("#ct-src").value] || ""; };
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {
-    $("#ct-out").innerHTML = `<div class="loading">Appel en cours (jusqu'à ${urls.timeout_s || 20} s)…</div>`;
+    $("#ct-out").innerHTML = `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
     try {
-      const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null });
+      const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });
       $("#ct-out").innerHTML = `<div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
         ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
         ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;

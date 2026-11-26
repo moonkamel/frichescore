@@ -26,6 +26,7 @@ def mock(monkeypatch):
         monkeypatch.setattr(K, "CARTOFRICHES_URL", "https://apidf.test/cartofriches/friches/")
         monkeypatch.setattr(K, "GEORISQUES_URL", "https://georisques.test/api/v1")
         monkeypatch.setattr(K, "GEODVF_URL", "https://dvf.test/csv")
+        monkeypatch.setattr(K.time, "sleep", lambda s: None)
     return install
 
 
@@ -181,3 +182,21 @@ def test_erreur_proxy_explicite(mock):
     mock(proxy)
     r = K.test_connection("dvf", "59350")
     assert not r["ok"] and "proxy" in r["erreur"]
+
+
+def test_nouvelle_tentative_apres_delai(mock):
+    calls = {"n": 0}
+
+    def h(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadTimeout("lent", request=req)
+        assert req.url.params["page_size"] == "500"
+        return httpx.Response(200, json=fx("cartofriches_page2.json"))
+    mock(h)
+    recs, _ = K.fetch_cartofriches("59512")
+    assert calls["n"] == 2 and len(recs) == 1
+
+
+def test_adresse_cartofriches_alignee_sur_client_officiel():
+    assert K.CARTOFRICHES_URL.endswith("/cartofriches/friches") or "CARTOFRICHES_URL" in __import__("os").environ

@@ -37,10 +37,14 @@ import httpx
 from ..scoring.record import Provenance, Record
 from .mapping import row_to_record
 
-CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches/friches/")
+# Adresse et paramètres alignés sur le client officiel du Cerema (paquet PyPI « apifoncier2 ») :
+# base https://apidf-preprod.cerema.fr, point d'accès /cartofriches/friches (sans « / » final), page_size=500, délai 60 s.
+CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches/friches")
+CARTOFRICHES_PAGE_SIZE = 500
 GEORISQUES_URL = os.environ.get("GEORISQUES_URL", "https://www.georisques.gouv.fr/api/v1")
 GEODVF_URL = os.environ.get("GEODVF_URL", "https://files.data.gouv.fr/geo-dvf/latest/csv")
-TIMEOUT = float(os.environ.get("FRICHESCORE_HTTP_TIMEOUT", "20"))
+TIMEOUT = float(os.environ.get("FRICHESCORE_HTTP_TIMEOUT", "60"))
+RETRIES = int(os.environ.get("FRICHESCORE_HTTP_RETRIES", "1"))  # nouvelle tentative après un délai dépassé
 MAX_PAGES = 50
 
 # Transport injectable (tests : httpx.MockTransport)
@@ -55,25 +59,38 @@ class ConnectorError(Exception):
         self.message, self.url, self.status, self.body = message, url, status, body
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=True, transport=TRANSPORT,
+def _client(timeout: float | None = None) -> httpx.Client:
+    return httpx.Client(timeout=httpx.Timeout(timeout or TIMEOUT, connect=15.0), follow_redirects=True, transport=TRANSPORT,
                         headers={"User-Agent": "FricheScore/0.2 (outil local)", "Accept": "application/json, text/csv, */*"})
 
 
 def _get(c: httpx.Client, url: str, params: dict | None = None, expect: str = "json"):
-    """GET avec traduction des erreurs. expect = 'json' | 'text'."""
-    try:
-        r = c.get(url, params=params)
-    except httpx.TimeoutException:
-        raise ConnectorError(f"délai dépassé ({TIMEOUT:.0f} s) : le service ne répond pas", url)
-    except httpx.ProxyError as e:
-        raise ConnectorError("le proxy de sortie de cette machine refuse l'accès à ce service — "
-                             "autoriser l'adresse dans le proxy/pare-feu ou lancer FricheScore depuis un poste ayant accès à Internet : "
-                             + str(e)[:160], url)
-    except httpx.ConnectError as e:
-        raise ConnectorError("connexion impossible (service hors ligne, DNS, proxy ou pare-feu) : " + str(e)[:160], url)
-    except httpx.HTTPError as e:
-        raise ConnectorError(f"erreur réseau ({type(e).__name__}) : {str(e)[:160]}", url)
+    """GET avec traduction des erreurs et une nouvelle tentative après un délai dépassé.
+    expect = 'json' | 'text'."""
+    r = None
+    for attempt in range(RETRIES + 1):
+        try:
+            r = c.get(url, params=params)
+            break
+        except httpx.ConnectTimeout:
+            raise ConnectorError("connexion impossible dans le délai : le serveur ne répond pas (service arrêté, "
+                                 "adresse erronée ou réseau filtrant)", url)
+        except httpx.TimeoutException:
+            if attempt < RETRIES:
+                time.sleep(2)
+                continue
+            t = c.timeout.read or TIMEOUT
+            raise ConnectorError(f"délai dépassé ({t:.0f} s, {RETRIES + 1} tentative(s)) : le serveur accepte la connexion "
+                                 "mais ne renvoie pas de réponse — service surchargé ou en maintenance ; réessayer plus tard "
+                                 "ou augmenter le délai", url)
+        except httpx.ProxyError as e:
+            raise ConnectorError("le proxy de sortie de cette machine refuse l'accès à ce service — autoriser l'adresse "
+                                 "dans le proxy/pare-feu ou lancer FricheScore depuis un poste ayant accès à Internet : "
+                                 + str(e)[:160], url)
+        except httpx.ConnectError as e:
+            raise ConnectorError("connexion impossible (service hors ligne, DNS, proxy ou pare-feu) : " + str(e)[:160], url)
+        except httpx.HTTPError as e:
+            raise ConnectorError(f"erreur réseau ({type(e).__name__}) : {str(e)[:160]}", url)
     full = str(r.request.url) if r.request else url
     if r.status_code == 404:
         raise ConnectorError("ressource introuvable (HTTP 404) — vérifier l'adresse de l'API ou le code demandé", full, 404, r.text[:500])
@@ -155,7 +172,7 @@ def cartofriches_records(rows: list[dict]) -> tuple[list[Record], list[str]]:
 def fetch_cartofriches(code_insee: str, base_url: str | None = None) -> tuple[list[Record], list[str]]:
     rows: list[dict] = []
     url = base_url or CARTOFRICHES_URL
-    params: dict | None = {"code_insee": code_insee}
+    params: dict | None = {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE}
     with _client() as c:
         for _ in range(MAX_PAGES):
             data, _full, _st = _get(c, url, params)
@@ -327,16 +344,16 @@ def dvf_commune_record(code_insee: str, ind: dict) -> Record:
 
 # ---------------------------------------------------------- test de connexion
 def test_connection(source: str, code_insee: str = "59350", lat: float = 50.6329, lon: float = 3.0586,
-                    base_url: str | None = None) -> dict:
+                    base_url: str | None = None, timeout: float | None = None) -> dict:
     """Appel RÉEL et diagnostic lisible, pour l'onglet Données."""
     t0 = time.monotonic()
     res = {"source": source, "ok": False, "url": None, "http_status": None, "duree_ms": None,
            "apercu_brut": None, "resultat": None, "erreur": None}
     try:
-        with _client() as c:
+        with _client(timeout) as c:
             if source == "cartofriches":
                 url = base_url or CARTOFRICHES_URL
-                data, full, st = _get(c, url, {"code_insee": code_insee})
+                data, full, st = _get(c, url, {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE})
                 rows = parse_cartofriches(data)
                 recs, warns = cartofriches_records(rows)
                 res.update(url=full, http_status=st, apercu_brut=json.dumps(data, ensure_ascii=False)[:1500],
