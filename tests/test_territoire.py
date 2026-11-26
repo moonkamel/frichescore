@@ -279,3 +279,37 @@ def test_sitadel_repli_departement_et_code_a_3_chiffres(mock):
     mock(_dido_handler(csv_for))
     out, diag = T.sitadel_values({"59350", "59512"})
     assert out == {"59350": 120.0} and diag["filtre"].startswith("DEP")
+
+
+def test_sitadel_colonnes_lues_dans_l_entete(mock):
+    """Cas réel : les métadonnées DiDo ne listent pas les colonnes -> lecture de l'en-tête du CSV."""
+    y = T.date.today().year - 1
+
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv", "url": DIDO_URL}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"rid": "577a8a66", "title": "x", "millesimes": [{"millesime": "2026-11"}]})
+        if req.url.params.get("millesime") == "2026-11":
+            return httpx.Response(400, json={"message": "pas disponible avant 2026-11-27"})
+        if "COMM" in req.url.params:
+            assert req.url.params["COMM"] == "eq:59350"
+            return httpx.Response(200, text=f"DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n59;59350;{y}-02;210\n")
+        # requête d'en-tête (non filtrée) : un gros fichier dont on ne lit que le début
+        big = "REG;DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT;LOG_COM\n" + "32;59;59001;2020-01;1;1\n" * 50000
+        return httpx.Response(200, text=big)
+    mock(h)
+    out, diag = T.sitadel_values({"59350"})
+    assert out == {"59350": 210.0} and diag["colonne_code"] == "COMM" and diag["millesime"] == "2026-10"
+
+
+def test_sitadel_filtre_ignore_par_le_serveur(mock, monkeypatch):
+    monkeypatch.setattr(T, "MAX_FILTERED_BYTES", 10_000)
+
+    def csv_for(req):
+        return httpx.Response(200, text="DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n" + "59;59001;2025-01;1\n" * 5000)
+    mock(_dido_handler(csv_for))
+    with pytest.raises(K.ConnectorError) as e:
+        T.sitadel_values({"59350", "59512"})
+    assert "filtre" in str(e.value.message) or "aucune ligne" in str(e.value.message)

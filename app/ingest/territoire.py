@@ -434,7 +434,55 @@ def dido_info(url: str) -> dict:
             for x in o:
                 walk(x, under_col)
     walk(meta)
-    return {"base": base, "rid": rid, "millesimes": extra.get("millesimes_disponibles", []), "colonnes": list(dict.fromkeys(cols))}
+    return {"base": base, "rid": rid, "millesimes": extra.get("millesimes_disponibles", []), "colonnes": list(dict.fromkeys(cols)),
+            "cles_metadonnees": sorted(meta.keys())[:30] if isinstance(meta, dict) else []}
+
+
+MAX_FILTERED_BYTES = 30 * 1024 * 1024
+
+
+def _stream_text(url: str, params: dict, max_bytes: int | None = None, head_only: bool = False) -> tuple[str, str]:
+    """GET en flux. head_only : ne lit que le début (en-tête + quelques lignes) puis coupe la connexion.
+    max_bytes : abandonne si la réponse dépasse ce volume (filtre ignoré par le serveur)."""
+    with K._client(120) as c:
+        try:
+            with c.stream("GET", url, params=params) as r:
+                full = str(r.request.url)
+                if r.status_code >= 400:
+                    body = r.read().decode("utf-8", errors="replace")[:300]
+                    raise K.ConnectorError(f"HTTP {r.status_code} : {body}", full, r.status_code)
+                buf = bytearray()
+                for chunk in r.iter_bytes(1 << 15):
+                    buf += chunk
+                    if head_only and (buf.count(b"\n") >= 5 or len(buf) > 262144):
+                        break
+                    if max_bytes and len(buf) > max_bytes:
+                        raise K.ConnectorError(f"réponse de plus de {max_bytes // 1048576} Mo : le filtre n'a pas été appliqué "
+                                               "par le serveur, téléchargement abandonné", full)
+        except K.httpx.HTTPError as e:
+            raise K.ConnectorError(f"erreur réseau ({type(e).__name__}) : {str(e)[:120]}", url)
+    return bytes(buf).decode("utf-8-sig", errors="replace"), full
+
+
+def dido_header(info: dict) -> tuple[list[str], str | None, list[str]]:
+    """Noms de colonnes lus dans l'en-tête du CSV (premier millésime publié), sans télécharger le fichier."""
+    url = f"{info['base']}/datafiles/{info['rid']}/csv"
+    errs = []
+    for mil in info["millesimes"][:4] or [None]:
+        p_ = {"withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false"}
+        if mil:
+            p_["millesime"] = mil
+        try:
+            txt, _f = _stream_text(url, p_, head_only=True)
+        except K.ConnectorError as e:
+            errs.append(f"{mil} : {e.message[:120]}")
+            if e.status not in (400, 404, 409, 425):
+                raise
+            continue
+        first = txt.splitlines()[0] if txt else ""
+        delim = max(";,\t", key=first.count)
+        return [h.strip().strip('"') for h in first.split(delim) if h.strip()], mil, errs
+    raise K.ConnectorError("SITADEL : aucun millésime téléchargeable — " + " | ".join(errs[-3:]))
 
 
 def _pick(cols, *patterns):
@@ -460,6 +508,10 @@ def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tu
         res = resolve_resource("sitadel")
         info = dido_info(res["url"])
         cols = info["colonnes"]
+        mil_ok = None
+        if not cols:  # colonnes absentes des métadonnées : lecture de l'en-tête du fichier
+            cols, mil_ok, _e = dido_header(info)
+        diag["cles_metadonnees"] = info.get("cles_metadonnees")
         code_col = _pick(cols, r"(depcom|codgeo|code_?insee|code_?commune|insee_?com|com_?code|cog)", r"comm?(une)?")
         dep_col = _pick(cols, r"dep(artement)?(_code)?")
         date_col = _pick(cols, r"date.*", r"(annee|an|periode|mois)")
@@ -479,7 +531,11 @@ def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tu
             deps = sorted({c[:3] if c.startswith("97") else c[:2] for c in todo})
             attempts.append(("dep", dep_col, {d: d for d in deps}))
         rows, used, errs = None, None, []
-        for mil in info["millesimes"][:4] or [None]:
+        mils = info["millesimes"][:4] or [None]
+        if mil_ok in mils:  # le millésime dont on a lu l'en-tête est publié : on commence par lui
+            mils = [m for m in mils if m >= mil_ok] if mil_ok else mils
+            mils = [mil_ok] + [m for m in mils if m != mil_ok]
+        for mil in mils:
             p_ = dict(base_params)
             if mil:
                 p_["millesime"] = mil
@@ -488,8 +544,7 @@ def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tu
                 q = dict(p_)
                 q[col] = ("in:" + ",".join(vals)) if len(vals) > 1 else f"eq:{vals[0]}"
                 try:
-                    with K._client(120) as c:
-                        txt, full, _st = K._get(c, url, q, expect="text")
+                    txt, full = _stream_text(url, q, max_bytes=MAX_FILTERED_BYTES)
                 except K.ConnectorError as e:
                     errs.append(f"{mil} {col}={q[col][:40]} : {e.message[:140]}")
                     if e.status not in (400, 404, 409, 425):
