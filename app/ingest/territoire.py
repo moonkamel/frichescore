@@ -412,6 +412,125 @@ def parse_sitadel(path: Path, codes: set[str], years: int = 3) -> tuple[dict, di
     return out, diag
 
 
+# ------------------------------------------------- SITADEL filtré (DiDo)
+def dido_info(url: str) -> dict:
+    """Métadonnées d'un fichier DiDo : base, identifiant, millésimes (avec repli sur les mois précédents), colonnes."""
+    m = DIDO.search(url)
+    if not m:
+        raise K.ConnectorError("la ressource SITADEL n'est pas servie par l'API DiDo", url)
+    base, rid = m.group(1), m.group(2)
+    _u, params, extra = dido_params(url)
+    with K._client(60) as c:
+        meta, _f, _s = K._get(c, f"{base}/datafiles/{rid}")
+    cols = []
+
+    def walk(o, under_col=False):
+        if isinstance(o, dict):
+            if under_col and isinstance(o.get("name"), str):
+                cols.append(o["name"])
+            for k, v in o.items():
+                walk(v, under_col or "column" in k.lower())
+        elif isinstance(o, list):
+            for x in o:
+                walk(x, under_col)
+    walk(meta)
+    return {"base": base, "rid": rid, "millesimes": extra.get("millesimes_disponibles", []), "colonnes": list(dict.fromkeys(cols))}
+
+
+def _pick(cols, *patterns):
+    for pat in patterns:
+        for c in cols:
+            if re.fullmatch(pat, _norm(c)):
+                return c
+    return None
+
+
+SITADEL_CACHE = "sitadel_communes.json"
+
+
+def sitadel_values(codes: set[str], refresh: bool = False, years: int = 3) -> tuple[dict, dict]:
+    """Logements autorisés (moyenne annuelle des `years` dernières années complètes) pour les seules communes
+    demandées, via les filtres de l'API DiDo — sans télécharger le fichier national."""
+    cache_p = cache_dir() / SITADEL_CACHE
+    cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.exists() else {}
+    now = time.time()
+    todo = sorted(c for c in codes if refresh or c not in cache or now - cache[c].get("ts", 0) > CACHE_MAX_AGE_DAYS * 86400)
+    diag = {"communes_en_cache": len(codes) - len(todo), "communes_interrogees": len(todo)}
+    if todo:
+        res = resolve_resource("sitadel")
+        info = dido_info(res["url"])
+        cols = info["colonnes"]
+        code_col = _pick(cols, r"(depcom|codgeo|code_?insee|code_?commune|insee_?com|com_?code|cog)", r"comm?(une)?")
+        dep_col = _pick(cols, r"dep(artement)?(_code)?")
+        date_col = _pick(cols, r"date.*", r"(annee|an|periode|mois)")
+        log_col = _pick(cols, r"log_?aut(ori[sz]es?)?") or next((c for c in cols if "aut" in _norm(c) and "log" in _norm(c) and "surf" not in _norm(c)), None)
+        diag.update({"ressource": res.get("titre"), "colonnes": cols[:30], "colonne_code": code_col, "colonne_departement": dep_col,
+                     "colonne_date": date_col, "colonne_logements": log_col})
+        if not (code_col and date_col and log_col):
+            raise K.ConnectorError(f"SITADEL : colonnes non identifiées dans les métadonnées DiDo ({', '.join(cols[:15]) or 'aucune'})")
+        url = f"{info['base']}/datafiles/{info['rid']}/csv"
+        keep = ",".join(c for c in (dep_col, code_col, date_col, log_col) if c)
+        base_params = {"withColumnName": "true", "withColumnDescription": "false", "withColumnUnit": "false", "columns": keep}
+        # Le code commune peut tenir sur 3 caractères (avec une colonne département) ou 5 : on essaie les deux.
+        five = {c: c for c in todo}
+        three = {c[2:] if not c.startswith("97") else c[3:]: c for c in todo}
+        attempts = [("in", code_col, five), ("in", code_col, three)]
+        if dep_col:
+            deps = sorted({c[:3] if c.startswith("97") else c[:2] for c in todo})
+            attempts.append(("dep", dep_col, {d: d for d in deps}))
+        rows, used, errs = None, None, []
+        for mil in info["millesimes"][:4] or [None]:
+            p_ = dict(base_params)
+            if mil:
+                p_["millesime"] = mil
+            for kind, col, mapping in attempts:
+                vals = sorted(mapping)
+                q = dict(p_)
+                q[col] = ("in:" + ",".join(vals)) if len(vals) > 1 else f"eq:{vals[0]}"
+                try:
+                    with K._client(120) as c:
+                        txt, full, _st = K._get(c, url, q, expect="text")
+                except K.ConnectorError as e:
+                    errs.append(f"{mil} {col}={q[col][:40]} : {e.message[:140]}")
+                    if e.status not in (400, 404, 409, 425):
+                        raise
+                    continue
+                rd = list(csv.DictReader(io.StringIO(txt.lstrip("\ufeff")), delimiter=";" if txt.count(";") >= txt.count(",") else ","))
+                if rd:
+                    rows, used = rd, {"millesime": mil, "filtre": f"{col}={q[col][:60]}", "url": full, "lignes": len(rd)}
+                    break
+            if rows is not None:
+                break
+        diag["essais_en_echec"] = errs[-6:]
+        if rows is None:
+            raise K.ConnectorError("SITADEL : aucune ligne renvoyée par l'API DiDo pour ces communes — " + " | ".join(errs[-3:]))
+        diag.update(used)
+        per: dict[str, dict] = {c: {} for c in todo}
+        for r in rows:
+            raw = str(r.get(code_col) or "").strip()
+            dep = str(r.get(dep_col) or "").strip() if dep_col else ""
+            code = raw if len(raw) == 5 else (dep.zfill(2) + raw.zfill(3) if dep else raw)
+            if code not in per:
+                continue
+            m = re.search(r"(19|20)\d{2}", str(r.get(date_col) or ""))
+            v = _num(r.get(log_col))
+            if m and v is not None:
+                per[code][m.group(0)] = per[code].get(m.group(0), 0.0) + v
+        for c in todo:
+            cache[c] = {"annees": per[c], "ts": now, "millesime": used.get("millesime")}
+        cache_p.write_text(json.dumps(cache), encoding="utf-8")
+    last_full = date.today().year - 1
+    yrs = [str(y) for y in range(last_full - years + 1, last_full + 1)]
+    out = {}
+    for c in codes:
+        d = (cache.get(c) or {}).get("annees") or {}
+        avail = [y for y in yrs if y in d]
+        if avail:
+            out[c] = sum(d[y] for y in avail) / len(avail)
+    diag["annees"] = [int(y) for y in yrs]
+    return out, diag
+
+
 # --------------------------------------------- consommation d'ENAF (Cerema)
 def fetch_conso_enaf(code: str) -> tuple[float | None, dict]:
     """Consommation d'espaces NAF 2011-2021 (ha) via l'API Cerema /indicateurs/conso_espace."""
@@ -472,11 +591,16 @@ def enrich_communes(codes: list[str], existing: dict[str, Record] | None = None,
         except K.ConnectorError as e:
             rep["erreurs"].append(f"{c} : API Géo — {e.message}")
     cs = set(codes)
-    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", parse_sitadel)):
-        tick(f"{DATASETS[name]['label']} : fichier national", 0, 1)
+    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None)):
+        tick(f"{DATASETS[name]['label']}", 0, 1)
         try:
-            path, meta = cached_file(name, refresh)
-            vals, diag = parser(path, cs)
+            if name == "sitadel":  # interrogation filtrée de l'API DiDo (pas de fichier national)
+                vals, diag = sitadel_values(cs, refresh)
+                meta = {"titre": diag.get("ressource") or "API DiDo (SDES)", "date": diag.get("millesime"),
+                        "telecharge_le": date.today().isoformat()}
+            else:
+                path, meta = cached_file(name, refresh)
+                vals, diag = parser(path, cs)
             rep["fichiers"][name] = {"titre": meta.get("titre"), "date": meta.get("date"), "telecharge_le": meta.get("telecharge_le"),
                                      "communes_trouvees": len(vals), **{k: v for k, v in diag.items() if k != "colonnes"}}
             src = f"{DATASETS[name]['label']} — data.gouv.fr ({meta.get('titre') or ''})"
@@ -524,8 +648,15 @@ def test_communes(code: str, refresh: bool = False) -> dict:
         out["api_geo"] = {"ok": True, "url": diag["url"], "valeurs": {k: v for k, (v, _p) in vals.items()}}
     except K.ConnectorError as e:
         out["api_geo"] = {"ok": False, "erreur": e.message, "url": e.url}
-    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", parse_sitadel)):
+    for name, parser in (("zonage_abc", parse_zonage), ("lovac", parse_lovac), ("sitadel", None)):
         try:
+            if name == "sitadel":
+                vals, diag = sitadel_values({code}, refresh)
+                meta = {"titre": diag.get("ressource"), "date": diag.get("millesime"), "url": diag.get("url")}
+                out[name] = {"ok": code in vals, "ressource": meta, "detection": diag,
+                             "valeur": round(vals[code], 1) if code in vals else None,
+                             **({} if code in vals else {"erreur": "aucune donnée pour cette commune sur les 3 dernières années"})}
+                continue
             path, meta = cached_file(name, refresh)
             vals, diag = parser(path, {code})
             out[name] = {"ok": code in vals, "ressource": {k: meta.get(k) for k in ("titre", "date", "url", "telecharge_le", "candidats")},

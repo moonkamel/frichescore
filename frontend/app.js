@@ -1031,7 +1031,7 @@ async function renderDonnees() {
       <button class="btn" id="cf-go" style="flex:0;white-space:nowrap">Importer</button></div>
     <div id="cf-out" class="small" style="margin-top:6px"></div>
     <h4 style="margin-top:16px">Indicateurs communaux des friches réelles</h4>
-    <p class="small muted" style="margin:4px 0 6px">Population et mairie (API Géo), zonage ABC, vacance des logements (LOVAC), logements autorisés (SITADEL) et consommation d'espaces (Cerema). Les fichiers nationaux sont téléchargés une fois puis gardés en cache 30 jours. À relancer après un import CSV ou pour rafraîchir les données.</p>
+    <p class="small muted" style="margin:4px 0 6px">Population et mairie (API Géo), zonage ABC, vacance des logements (LOVAC), logements autorisés (SITADEL, interrogé commune par commune) et consommation d'espaces (Cerema). Les fichiers nationaux sont téléchargés une fois puis gardés en cache 30 jours. À relancer après un import CSV ou pour rafraîchir les données.</p>
     <div class="row" style="justify-content:flex-start"><button class="btn sec" id="com-go" style="flex:0;white-space:nowrap">Mettre à jour les indicateurs communaux</button>
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="com-refresh"> retélécharger les fichiers nationaux</label></div>
     <div id="com-out" class="small" style="margin-top:6px"></div>
@@ -1083,7 +1083,7 @@ async function renderDonnees() {
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {
     $("#ct-out").innerHTML = $("#ct-src").value === "communes"
-      ? `<div class="loading">Interrogation des 5 sources… Le premier test télécharge les fichiers nationaux (zonage ABC, LOVAC, SITADEL) : comptez jusqu'à quelques minutes, les tests suivants utilisent le cache.</div>`
+      ? `<div class="loading">Interrogation des 5 sources… Le premier test télécharge deux fichiers nationaux (zonage ABC, LOVAC, quelques Mo) ; SITADEL est interrogé pour la seule commune testée. Comptez moins d'une minute.</div>`
       : `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
     try {
       const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });

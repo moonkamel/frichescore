@@ -230,3 +230,52 @@ def test_dido_un_seul_millesime_annonce(mock):
     mock(h)
     _p, meta = T.cached_file("sitadel")
     assert meta["millesime"] == "2026-10"
+
+
+DIDO_URL = "https://dido.test/dido/api/v1/datafiles/577a8a66-4157-4787-b00a-031b61afea61/csv"
+
+
+def _dido_handler(csv_for):
+    def h(req):
+        u = str(req.url)
+        if "/api/1/datasets/" in u:
+            return httpx.Response(200, json={"resources": [{"title": "Logements autorisés par commune", "format": "csv", "url": DIDO_URL}]})
+        if u.endswith("/datafiles/577a8a66-4157-4787-b00a-031b61afea61"):
+            return httpx.Response(200, json={"millesimes": [{"millesime": "2026-11"}],
+                                             "columns": [{"name": "REG"}, {"name": "DEP"}, {"name": "COMM"},
+                                                         {"name": "DATE_PRISE_EN_COMPTE"}, {"name": "LOG_AUT"}, {"name": "LOG_COM"}]})
+        if req.url.params.get("millesime") == "2026-11":
+            return httpx.Response(400, json={"message": "pas disponible avant 2026-11-27"})
+        assert "LOG_AUT" in req.url.params["columns"] and "LOG_COM" not in req.url.params["columns"]
+        return csv_for(req)
+    return h
+
+
+def test_sitadel_filtre_par_commune_sans_fichier_national(mock):
+    y = T.date.today().year - 1
+
+    def csv_for(req):
+        assert req.url.params["COMM"] == "in:59350,59512"  # seules les communes utiles sont demandées
+        lines = ["DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT"] + [f"59;59350;{yy}-03;300" for yy in (y - 2, y - 1, y)] + \
+                [f"59;59512;{y}-01;90"]
+        return httpx.Response(200, text="\n".join(lines) + "\n")
+    mock(_dido_handler(csv_for))
+    out, diag = T.sitadel_values({"59350", "59512"})
+    assert out == {"59350": 300.0, "59512": 90.0} and diag["millesime"] == "2026-10"
+    # deuxième appel : servi par le cache, sans réseau
+    mock(lambda req: (_ for _ in ()).throw(AssertionError("appel réseau inattendu")))
+    out2, diag2 = T.sitadel_values({"59350"})
+    assert out2 == {"59350": 300.0} and diag2["communes_en_cache"] == 1
+
+
+def test_sitadel_repli_departement_et_code_a_3_chiffres(mock):
+    y = T.date.today().year - 1
+
+    def csv_for(req):
+        if "COMM" in req.url.params:
+            return httpx.Response(400, json={"message": "opérateur non supporté"})
+        assert req.url.params["DEP"] == "eq:59"
+        return httpx.Response(200, text=f"DEP;COMM;DATE_PRISE_EN_COMPTE;LOG_AUT\n59;350;{y}-05;120\n59;009;{y}-05;10\n")
+    mock(_dido_handler(csv_for))
+    out, diag = T.sitadel_values({"59350", "59512"})
+    assert out == {"59350": 120.0} and diag["filtre"].startswith("DEP")
