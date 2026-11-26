@@ -19,7 +19,7 @@ const DIMS = ["d1", "d2", "d3", "d4", "d5"];
 const DSHORT = { d1: "Potentiel", d2: "Coût", d3: "Friction", d4: "Marché", d5: "Impact" };
 const TABS = [
   ["classement", "Classement"], ["contre", "Contre-analyse"], ["couts", "Coûts cachés"],
-  ["zan", "Horloge ZAN"], ["jumeau", "Jumeau"], ["portfolio", "Portfolio"], ["donnees", "Données"], ["parametres", "Paramètres"],
+  ["zan", "Horloge ZAN"], ["jumeau", "Jumeau"], ["portfolio", "Portfolio"], ["signaux", "Signaux"], ["donnees", "Données"], ["parametres", "Paramètres"],
 ];
 
 /* ------------------------------------------------------------------ outils */
@@ -161,6 +161,7 @@ async function boot() {
   setTab(location.hash.slice(1) || "classement");
   $("#btn-jobs").onclick = () => setTab("donnees");
   watchJobs();
+  refreshSignalBadge();
 }
 
 /* --------------------------------------------- tâches de fond (suivi global) */
@@ -208,7 +209,7 @@ function setTab(t) {
   render();
 }
 function render() {
-  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, donnees: renderDonnees, parametres: renderParametres }[S.tab];
+  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, signaux: renderSignaux, donnees: renderDonnees, parametres: renderParametres }[S.tab];
   f();
 }
 function perimeterLabel() {
@@ -327,6 +328,7 @@ function siteBadges(s) {
   else if (s.statut === "non_verifiee") b.push(`<span class="chip">non vérifiée</span>`);
   if (String(s.origine || "").startsWith("demo")) b.push(`<span class="chip gold">démo</span>`);
   if (s.portfolio) b.push(`<span class="chip ok">portfolio : ${esc(S.meta.stages[s.portfolio])}</span>`);
+  if (s.signaux && s.signaux.opportunites) b.push(`<span class="chip gold" title="Signal d'opportunité non lu">◆ ${s.signaux.opportunites} signal${s.signaux.opportunites > 1 ? "s" : ""}</span>`);
   return b.join("");
 }
 
@@ -445,6 +447,7 @@ function renderDrawer() {
       <button class="btn sec" id="d-port">${d.portfolio ? "Dans le portfolio : " + esc(S.meta.stages[d.portfolio.stage]) : "Ajouter au portfolio"}</button>
       <button class="btn sec" id="d-cmp">Comparer avec…</button>
     </div></div>
+    ${signauxCard(d)}
 
     <div class="card"><h3 style="margin-bottom:10px">Les cinq dimensions — ${esc(S.meta.usages[u])}</h3><div class="dimcards">
     ${DIMS.map((k) => { const val = ur.dims[k]; return `<div class="dimcard"><div class="top-line"><b>${esc(S.meta.dimensions[k])}</b><span class="v" style="color:${colorFor(val, k === "d3")}">${fmt(val)}</span></div>
@@ -674,6 +677,7 @@ function bindDrawer() {
   const p = $("#drawer-panel");
   bindDocs();
   bindNote();
+  bindSignalRows(() => { const id = S.drawer.id; refreshSite(id); openDrawer(id, S.drawer.usage, true); });
   p.querySelectorAll(".utabs button").forEach((b) => (b.onclick = () => { S.drawer.data.usage = b.dataset.u; S.drawer.usage = b.dataset.u; renderDrawer(); }));
   bindValueInput("wi"); bindValueInput("fd");
   const pdfb = $("#d-pdf"); if (pdfb) pdfb.onclick = () => download(`/api/sites/${encodeURIComponent(S.drawer.id)}/pdf`, { usage: S.drawer.data.usage, weights: S.weights, d5: S.d5, profile: S.profile }, `frichescore_${S.drawer.id}.pdf`);
@@ -1249,8 +1253,8 @@ async function renderDonnees() {
   <div class="card"><h3>Connecteurs Cartofriches · Géorisques · DVF</h3>
     <p class="small muted">Les connecteurs interrogent les API publiques depuis la machine qui exécute FricheScore. Commencez par <b>tester la connexion</b> : l'appel est réel et le résultat brut (ou l'erreur exacte) s'affiche. En cas d'échec, l'outil n'invente aucune donnée.</p>
     <div class="grid3" style="align-items:end">
-      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option><option value="communes">Indicateurs communaux (API Géo, zonage ABC, LOVAC, SITADEL, ENAF)</option><option value="sites">Indicateurs de site (gares SNCF, transports OSM, PVGIS, risques Géorisques)</option></select></div>
-      <div><label class="small muted">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
+      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option><option value="communes">Indicateurs communaux (API Géo, zonage ABC, LOVAC, SITADEL, ENAF)</option><option value="sites">Indicateurs de site (gares SNCF, transports OSM, PVGIS, risques Géorisques)</option><option value="bodacc">Annonces légales BODACC (SIREN à tester)</option></select></div>
+      <div><label class="small muted" id="ct-insee-lbl">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
       <div class="row"><div><label class="small muted">Latitude</label><input type="number" id="ct-lat" value="50.6329" step="any"></div><div><label class="small muted">Longitude</label><input type="number" id="ct-lon" value="3.0586" step="any"></div></div>
       <div style="grid-column:1 / 3"><label class="small muted">Adresse de l'API (modifiable si elle a changé)</label><input type="text" id="ct-url"></div>
       <div class="row" style="align-items:end"><div style="max-width:110px"><label class="small muted">Délai max (s)</label><input type="number" id="ct-timeout" min="5" max="180" value="60"></div><button class="btn" id="ct-go" style="white-space:nowrap">Tester la connexion</button></div>
@@ -1315,14 +1319,21 @@ async function renderDonnees() {
   const urls = await api("/api/connecteurs").catch(() => ({}));
   urls.communes = "API Géo · data.gouv.fr · Cerema (adresses résolues automatiquement)";
   urls.sites = "SNCF open data · Overpass (OpenStreetMap) · PVGIS · Géorisques — point testé : latitude / longitude ci-contre";
-  const setUrl = () => { $("#ct-url").value = urls[$("#ct-src").value] || ""; };
+  urls.bodacc = "BODACC (DILA, open data) — indiquez un SIREN dans le champ ci-contre";
+  const setUrl = () => {
+    const bo = $("#ct-src").value === "bodacc";
+    $("#ct-url").value = urls[$("#ct-src").value] || "";
+    $("#ct-insee-lbl").textContent = bo ? "SIREN à tester (9 chiffres)" : "Code INSEE de test";
+    if (bo && $("#ct-insee").value.length === 5) $("#ct-insee").value = "";
+    if (!bo && !$("#ct-insee").value) $("#ct-insee").value = "59350";
+  };
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {
     $("#ct-out").innerHTML = $("#ct-src").value === "communes"
       ? `<div class="loading">Interrogation des 5 sources… Le premier test télécharge deux fichiers nationaux (zonage ABC, LOVAC, quelques Mo) ; SITADEL est interrogé pour la seule commune testée. Comptez moins d'une minute.</div>`
       : `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
     try {
-      const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });
+      const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-src").value === "bodacc" ? null : $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null, siren: $("#ct-insee").value });
       S.lastConnTest = r;
       $("#ct-out").innerHTML = `<div class="row" style="justify-content:flex-end;gap:6px;margin-bottom:6px"><button class="btn sm" id="ct-copy" style="flex:0;white-space:nowrap">Copier le rapport complet</button><button class="btn sm sec" id="ct-dl" style="flex:0;white-space:nowrap">Télécharger (JSON)</button></div>
         <div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
@@ -1427,6 +1438,7 @@ function majResume(r) {
   if (r.nb_nouvelles) parts.push(`<b>${r.nb_nouvelles} nouvelle(s)</b>`);
   if (r.nb_scores_modifies) parts.push(`<b>${r.nb_scores_modifies} score(s) modifié(s)</b>`);
   if (r.nb_absentes) parts.push(`${r.nb_absentes} absente(s) de Cartofriches`);
+  if (r.signaux_nouveaux) parts.push(`<b>${r.signaux_nouveaux} signal(aux)</b>`);
   if (r.packs_publies) parts.push(`${r.packs_publies.length} pack(s) publié(s)`);
   if (r.erreurs && r.erreurs.length) parts.push(`${r.erreurs.length} erreur(s)`);
   return parts.join(" · ");
@@ -1455,6 +1467,7 @@ async function renderMaj() {
     </div>
     <div class="row" style="margin-top:8px;justify-content:flex-start;flex-wrap:wrap;gap:12px" id="maj-apis-opts">
       <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="maj-refresh" ${r.rafraichir_fichiers ? "checked" : ""}> retélécharger les fichiers nationaux (LOVAC, zonage, BPE…)</label>
+      <label class="toggle" style="flex:0;white-space:nowrap" title="Annonces légales des entreprises propriétaires ou exploitantes (procédures collectives, ventes, radiations)"><input type="checkbox" id="maj-bodacc" ${r.signaux_bodacc !== false ? "checked" : ""}> rechercher les signaux BODACC</label>
       <label class="toggle" style="flex:0;white-space:nowrap" title="Ce serveur devient serveur central : un pack par département est écrit après chaque mise à jour et servi à l'adresse /api/packs/&lt;département&gt;.json.gz"><input type="checkbox" id="maj-pub" ${r.publier_packs ? "checked" : ""}> publier les packs pour d'autres postes</label>
     </div>
     <p class="hint">${r.mode === "apis" ? "Sont mises à jour : les communes portant déjà des friches Cartofriches, toutes les communes des départements listés, et les indicateurs des friches importées par CSV. Comptez plusieurs heures pour un département entier la première nuit." : "Le pack de chaque département listé est téléchargé puis importé en quelques secondes."}</p>
@@ -1481,7 +1494,7 @@ async function renderMaj() {
   $("#maj-save").onclick = async () => {
     try {
       await api("/api/maj", { actif: $("#maj-actif").checked, heure: $("#maj-heure").value, mode: $("#maj-mode").value, departements: deps($("#maj-deps").value),
-        pack_url: $("#maj-url").value, rafraichir_fichiers: $("#maj-refresh").checked, publier_packs: $("#maj-pub").checked }, "PUT");
+        pack_url: $("#maj-url").value, rafraichir_fichiers: $("#maj-refresh").checked, publier_packs: $("#maj-pub").checked, signaux_bodacc: $("#maj-bodacc").checked }, "PUT");
       toast("Réglages de mise à jour enregistrés."); renderMaj();
     } catch (e) { $("#maj-out").innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
   };
@@ -1514,6 +1527,70 @@ async function renderMaj() {
   };
   $("#pk-check").onclick = () => pkImport(true);
   $("#pk-imp").onclick = () => pkImport(false);
+}
+const SIG_NIV = { opportunite: ["opportunité", "gold"], alerte: ["alerte", "bad"], info: ["info", ""] };
+async function refreshSignalBadge() {
+  try {
+    const v = await api("/api/signaux?non_vus=true");
+    S.signauxNonVus = v.non_vus;
+    const b = document.querySelector('#tabs button[data-tab="signaux"]');
+    if (b) b.innerHTML = `Signaux${v.non_vus ? ` <span class="tab-badge">${v.non_vus}</span>` : ""}`;
+  } catch (e) { /* noop */ }
+}
+function signalRow(x, withSite) {
+  const [lbl, cls] = SIG_NIV[x.niveau] || [x.niveau, ""];
+  return `<tr class="${x.vu ? "muted" : ""}">
+    <td class="small" style="white-space:nowrap">${esc((x.date_evenement || x.detecte_le || "").slice(0, 10))}</td>
+    ${withSite ? `<td>${x.supprimee ? esc(x.friche_id) : `<a href="#" data-sig-site="${esc(x.friche_id)}">${esc(x.nom || x.friche_id)}</a>`}<div class="small muted">${esc(x.commune || "")}</div></td>` : ""}
+    <td><span class="chip ${cls}">${esc(lbl)}</span></td>
+    <td>${x.vu ? "" : "<b>"}${esc(x.titre)}${x.vu ? "" : "</b>"}<div class="small muted">${esc(x.detail || "")}</div></td>
+    <td class="small">${esc(x.source || "")}${x.url ? ` · <a href="${esc(x.url)}" target="_blank" rel="noopener">annonce</a>` : ""}</td>
+    <td>${x.vu ? `<button class="btn sm sec" data-sig-vu="${x.id}" data-v="0">Non lu</button>` : `<button class="btn sm sec" data-sig-vu="${x.id}" data-v="1">Lu</button>`}</td></tr>`;
+}
+function signauxCard(d) {
+  const l = d.signaux || [];
+  if (!l.length) return "";
+  return `<div class="card"><h3>Signaux</h3><table class="fv" style="margin-top:6px"><tbody>${l.slice(0, 8).map((x) => signalRow(x, false)).join("")}</tbody></table></div>`;
+}
+async function renderSignaux() {
+  $("#main").innerHTML = `<div class="section-head"><div><h2>Signaux d'opportunité</h2><p>Ce qui rend un site actionnable ou change la donne, détecté à chaque mise à jour : procédure collective, vente ou radiation de l'entreprise propriétaire ou exploitante (BODACC), cessation d'activité d'une installation classée, zonage du PLU modifié, projet apparu, zone humide ou zone rouge nouvellement recensée, friche sortie de Cartofriches.</p></div></div>
+    <div class="card loading">Chargement…</div>`;
+  const st = S.sig || (S.sig = { niveau: "", nonLus: false });
+  let v;
+  try { v = await api("/api/signaux"); } catch (e) { $("#main").lastElementChild.outerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  const rows = v.signaux.filter((x) => (!st.niveau || x.niveau === st.niveau) && (!st.nonLus || !x.vu));
+  $("#main").lastElementChild.outerHTML = `<div class="card">
+    <div class="row" style="justify-content:flex-start;align-items:center;flex-wrap:wrap;gap:8px">
+      <div class="seg" id="sig-niv">${[["", "Tous"], ["opportunite", "Opportunités"], ["alerte", "Alertes"], ["info", "Infos"]].map(([k, l]) => `<button data-n="${k}" class="${st.niveau === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="sig-nl" ${st.nonLus ? "checked" : ""}> non lus seulement</label>
+      <span style="flex:1"></span>
+      <button class="btn sm sec" id="sig-all" style="flex:0;white-space:nowrap" ${v.non_vus ? "" : "disabled"}>Tout marquer comme lu</button>
+      <button class="btn sm" id="sig-scan" style="flex:0;white-space:nowrap">Interroger le BODACC maintenant</button></div>
+    <div id="sig-out" class="small" style="margin-top:6px"></div>
+    ${rows.length ? `<table class="fv" style="margin-top:8px"><thead><tr><th>Date</th><th>Site</th><th>Type</th><th>Signal</th><th>Source</th><th></th></tr></thead><tbody>${rows.map((x) => signalRow(x, true)).join("")}</tbody></table>`
+      : `<div class="alert info" style="margin-top:8px">${v.signaux.length ? "Aucun signal pour ce filtre." : "Aucun signal pour l'instant. Les signaux apparaissent après une mise à jour (automatique ou manuelle, onglet Données) ou une interrogation du BODACC."}</div>`}
+    <p class="hint">Le BODACC est interrogé par SIREN : celui des exploitants d'installations classées présentes sur le site (Géorisques) et celui de la société propriétaire, que vous pouvez renseigner dans la fiche (donnée terrain « SIREN de la société propriétaire ») ou dans votre CSV (colonne <code>siren_proprietaire</code>). Aucun nom n'est repris des annonces.</p></div>`;
+  $("#sig-niv").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; st.niveau = b.dataset.n; renderSignaux(); };
+  $("#sig-nl").onchange = (e) => { st.nonLus = e.target.checked; renderSignaux(); };
+  $("#sig-all").onclick = async () => { await api("/api/signaux/vu", { ids: null, vu: true }); refreshSignalBadge(); await loadSites(true); renderSignaux(); };
+  $("#sig-scan").onclick = async () => {
+    $("#sig-scan").disabled = true;
+    const stj = await pollJob(await api("/api/signaux/rechercher", {}), $("#sig-out"));
+    if (stj.etat === "erreur") { $("#sig-out").innerHTML = `<div class="alert bad">${esc(stj.erreur)}</div>`; $("#sig-scan").disabled = false; return; }
+    const r = stj.rapport;
+    toast(`${r.sirens} SIREN interrogé(s), ${r.nouveaux} nouveau(x) signal(aux).`);
+    refreshSignalBadge(); await loadSites(true); await renderSignaux();
+    if (r.erreurs.length) $("#sig-out").innerHTML = `<div class="alert bad">${r.erreurs.slice(0, 10).map(esc).join("<br>")}</div>`;
+  };
+  bindSignalRows(renderSignaux);
+}
+function bindSignalRows(after) {
+  document.querySelectorAll("[data-sig-site]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); openDrawer(a.dataset.sigSite); }));
+  document.querySelectorAll("[data-sig-vu]").forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
+    await api("/api/signaux/vu", { ids: [+b.dataset.sigVu], vu: b.dataset.v === "1" });
+    refreshSignalBadge(); loadSites(true); after();
+  }));
 }
 function importReport(r, fname) {
   const dry = r.mode === "vérification";

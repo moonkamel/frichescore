@@ -434,12 +434,16 @@ class ConnTestReq(BaseModel):
     lon: float = 3.0586
     base_url: str | None = None
     timeout: float | None = None
+    siren: str | None = None
 
 
 @app.post("/api/connecteurs/test")
 def connector_test(r: ConnTestReq):
-    if r.source not in ("cartofriches", "georisques", "dvf", "communes", "sites"):
-        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf, communes, sites)")
+    if r.source not in ("cartofriches", "georisques", "dvf", "communes", "sites", "bodacc"):
+        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf, communes, sites, bodacc)")
+    if r.source == "bodacc":
+        from . import signaux as SG
+        return SG.test_bodacc(r.siren or "")
     if r.source == "sites":
         from .ingest import site as S_
         return S_.test_site(r.lat, r.lon, r.code_insee.strip())
@@ -531,6 +535,29 @@ def demo_reset():
 def delete_origin(origine: str):
     db.delete_origin(origine)
     return {"ok": True}
+
+
+# ------------------------------------------------------- signaux d'opportunité
+@app.get("/api/signaux")
+def signaux_list(non_vus: bool = False):
+    return service.signaux_view(non_vus)
+
+
+class SignauxVuReq(BaseModel):
+    ids: list[int] | None = None  # None = tous
+    vu: bool = True
+
+
+@app.post("/api/signaux/vu")
+def signaux_vu(r: SignauxVuReq):
+    db.signals_mark(r.ids, r.vu)
+    return service.signaux_view()
+
+
+@app.post("/api/signaux/rechercher")
+def signaux_search():
+    """Recherche BODACC immédiate pour toutes les friches réelles ayant un SIREN connu (tâche de fond)."""
+    return _start_job(service.signaux_rechercher, "Signaux : annonces BODACC")
 
 
 # ------------------------------------------------------- mise à jour automatique et packs

@@ -28,6 +28,8 @@ CATALOG: dict[str, tuple] = {
     "bati_emprise_m2": ("Emprise bâtie (m²)", "float", "BD TOPO / cadastre", "moyen", None),
     "bati_etat": ("État du bâti", "enum", "Cartofriches / visite", "faible", ["bon", "moyen", "degrade", "ruine", "inconnu"]),
     "bati_annee": ("Année de construction du bâti", "int", "Fichiers fonciers", "moyen", None),
+    "siren_proprietaire": ("SIREN de la société propriétaire", "str", "Fichiers fonciers / relevé de propriété", "eleve", None),
+    "siren_exploitants": ("SIREN des exploitants ICPE du site", "list", "Base ICPE / Géorisques", "eleve", None),
     "nb_proprietaires": ("Nombre de propriétaires", "int", "Fichiers fonciers (DGFiP/Cerema)", "eleve", None),
     "proprietaire_type": ("Type de propriétaire", "enum", "Fichiers fonciers", "eleve", ["public", "prive", "mixte", "inconnu"]),
     "nb_parcelles": ("Nombre de parcelles", "int", "Cadastre (PCI)", "eleve", None),

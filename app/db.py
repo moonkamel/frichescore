@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS ia_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, type TEXT, objet TEXT, entree INTEGER, sortie INTEGER, cout_usd REAL);
 CREATE TABLE IF NOT EXISTS ia_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, usage TEXT, created_at TEXT, note TEXT, modele TEXT, cout_usd REAL);
+CREATE TABLE IF NOT EXISTS signaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, cle TEXT UNIQUE, friche_id TEXT, type TEXT, niveau TEXT, titre TEXT,
+    detail TEXT, source TEXT, url TEXT, date_evenement TEXT, detecte_le TEXT, vu INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS reglages (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS maj_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT, debut TEXT, fin TEXT, declencheur TEXT, etat TEXT, resume TEXT);
@@ -424,3 +427,40 @@ def communes_rows(codes: list[str]) -> list[dict]:
 def friche_origins() -> dict[str, str]:
     with conn() as c:
         return {r[0]: r[1] for r in c.execute("SELECT id, origine FROM friches")}
+
+
+# -------------------------------------------------------------- signaux d'opportunité
+def signal_add(sig: dict) -> bool:
+    """Enregistre un signal ; False s'il était déjà connu (même clé)."""
+    with conn() as c:
+        cur = c.execute("INSERT OR IGNORE INTO signaux (cle, friche_id, type, niveau, titre, detail, source, url, "
+                        "date_evenement, detecte_le) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (sig["cle"], sig["friche_id"], sig["type"], sig["niveau"], sig["titre"], sig.get("detail"),
+                         sig.get("source"), sig.get("url"), sig.get("date_evenement"), now()))
+        return cur.rowcount > 0
+
+
+def signals_list(fid: str | None = None, non_vus: bool = False, limit: int = 500) -> list[dict]:
+    sql, args = "SELECT * FROM signaux WHERE 1=1", []
+    if fid:
+        sql += " AND friche_id = ?"
+        args.append(fid)
+    if non_vus:
+        sql += " AND vu = 0"
+    sql += " ORDER BY COALESCE(date_evenement, detecte_le) DESC, id DESC LIMIT ?"
+    with conn() as c:
+        return [dict(r) for r in c.execute(sql, (*args, limit))]
+
+
+def signals_mark(ids: list[int] | None, vu: bool = True) -> None:
+    with conn() as c:
+        if ids is None:
+            c.execute("UPDATE signaux SET vu = ?", (int(vu),))
+        else:
+            c.executemany("UPDATE signaux SET vu = ? WHERE id = ?", [(int(vu), i) for i in ids])
+
+
+def signal_counts() -> dict[str, dict]:
+    with conn() as c:
+        return {r[0]: {"total": r[1], "non_vus": r[2], "opportunites": r[3]} for r in c.execute(
+            "SELECT friche_id, COUNT(*), SUM(vu = 0), SUM(niveau = 'opportunite' AND vu = 0) FROM signaux GROUP BY friche_id")}

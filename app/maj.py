@@ -34,7 +34,7 @@ PACK_VERSION = 1
 MAX_PACK_BYTES = 300 * 1024 * 1024
 
 DEFAUT = {"actif": False, "heure": "03:00", "mode": "apis", "departements": [], "rafraichir_fichiers": True,
-          "pack_url": "", "publier_packs": False}
+          "pack_url": "", "publier_packs": False, "signaux_bodacc": True}
 
 
 # ------------------------------------------------------------------ réglages
@@ -88,7 +88,7 @@ def enregistrer(data: dict) -> dict:
             erreurs.append("l'adresse du serveur de packs doit commencer par http:// ou https://")
         else:
             r["pack_url"] = u
-    for k in ("rafraichir_fichiers", "publier_packs"):
+    for k in ("rafraichir_fichiers", "publier_packs", "signaux_bodacc"):
         if k in data:
             r[k] = bool(data[k])
     if r["mode"] == "pack" and r["actif"] and not (r["pack_url"] and r["departements"]):
@@ -153,8 +153,19 @@ def executer(progress=None, declencheur: str = "manuel", reglages_: dict | None 
     mid = db.maj_start(declencheur)
     t0 = time.time()
     try:
+        from . import signaux as SG
         avant = _instantane()
+        valeurs_avant = SG.valeurs(db.load_sites({"type": "tout"}))
         res = _maj_packs(r, progress) if r["mode"] == "pack" else _maj_apis(r, progress)
+        sites_apres = db.load_sites({"type": "tout"})
+        nouveaux = SG.enregistrer(SG.changements(valeurs_avant, SG.valeurs(sites_apres)))
+        nouveaux += SG.absentes(res.get("absentes_de_cartofriches") or [])
+        if r.get("signaux_bodacc", True):
+            b = SG.scan_bodacc(sites_apres, progress)
+            nouveaux += b["nouveaux"]
+            res["bodacc"] = {k: b[k] for k in ("sirens", "annonces", "nouveaux")}
+            res["erreurs"] = res.get("erreurs", []) + b["erreurs"]
+        res["signaux_nouveaux"] = nouveaux
         if r.get("publier_packs") and r["mode"] == "apis":
             if progress:
                 progress("Publication des packs", 0, 1)

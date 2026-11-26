@@ -57,13 +57,14 @@ def _compact_usage(ur: dict) -> dict:
 def scores(perimeter: dict) -> dict:
     sites = db.load_sites(perimeter)
     port = db.portfolio()
+    sig = db.signal_counts()
     out = []
     for sid, rec in sites.items():
         meta = {"id": sid, "nom": rec.get("nom"), "commune": rec.get("commune"), "code_insee": rec.get("code_insee"),
                 "departement": rec.get("departement"), "epci": rec.get("epci"), "lat": rec.get("lat"), "lon": rec.get("lon"),
                 "surface_m2": rec.get("surface_m2"), "type_friche": rec.get("type_friche"),
                 "statut": rec.get("statut_cartofriches"), "origine": rec.get("_origine"),
-                "portfolio": port.get(sid, {}).get("stage")}
+                "portfolio": port.get(sid, {}).get("stage"), "signaux": sig.get(sid)}
         ev = evaluate_site(rec)
         if not ev["evaluable"]:
             out.append({**meta, "evaluable": False, "manquants": ev["manquants"]})
@@ -101,7 +102,7 @@ def site_detail(sid: str, weights: dict | None, d5: bool, usage: str | None = No
     z = zan_clock(ranked, {sid: rec}, stages)["correspondances"]
     return {**base, "evaluable": True, "usage": usage, "usages": ev["usages"], "globals": globals_,
             "recommandations": recommendations(rec, ur), "zan": z, "weights": w,
-            "note_ia": db.ia_note_latest(sid, usage)}
+            "note_ia": db.ia_note_latest(sid, usage), "signaux": db.signals_list(sid, limit=30)}
 
 
 # ---------------------------------------------------------- contre-analyse
@@ -759,3 +760,25 @@ def ia_jumeau(a: dict, b: dict, weights, d5) -> dict:
     cout = IC.cout_usd(r["usage"])
     db.ia_log("conclusion_jumeau", f"{res['a'].get('nom')} / {res['b'].get('nom')}", r["usage"], cout)
     return {**r["conclusion"], "cout_usd": cout, "modele": r["modele"]}
+
+
+# ------------------------------------------------------- signaux d'opportunité
+def signaux_view(non_vus: bool = False) -> dict:
+    rows = db.signals_list(non_vus=non_vus)
+    sites = db.load_sites({"type": "ids", "values": sorted({r["friche_id"] for r in rows})}) if rows else {}
+    for r in rows:
+        s_ = sites.get(r["friche_id"])
+        r["nom"] = s_.get("nom") if s_ else None
+        r["commune"] = s_.get("commune") if s_ else None
+        r["supprimee"] = s_ is None
+    nv = [r for r in db.signals_list(non_vus=True)]
+    return {"signaux": rows, "non_vus": len(nv), "opportunites_non_vues": sum(r["niveau"] == "opportunite" for r in nv)}
+
+
+def signaux_rechercher(progress=None) -> dict:
+    from . import signaux as SG
+    rep = SG.scan_bodacc(db.load_sites({"type": "tout"}), progress)
+    if not rep["sirens"]:
+        rep["erreurs"].append("Aucune friche réelle n'a de SIREN connu (exploitant ICPE via Géorisques, ou colonne "
+                              "« siren_proprietaire » de votre CSV / saisie terrain).")
+    return rep

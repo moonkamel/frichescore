@@ -145,6 +145,18 @@ pollution forte qu'un site sans signal), recalcule le score et mesure la **proba
 Avec un budget d'études, il propose le programme qui maximise les bascules attendues par euro dépensé. Les coûts des
 études se règlent dans Paramètres ; les probabilités a priori sont des hypothèses de travail, pas des statistiques.
 
+### Signaux d'opportunité
+
+Onglet **Signaux** (le nombre de signaux non lus s'affiche sur l'onglet, et un repère ◆ dans le classement).
+À chaque mise à jour, FricheScore compare les données avant / après et signale : cessation d'activité d'une
+installation classée, zonage du PLU modifié (vers plus ou moins constructible), projet apparu sur le site, zone humide
+ou zone rouge de PPRi nouvellement recensée, friche sortie de Cartofriches. Il interroge aussi le **BODACC** (annonces
+légales, DILA, données ouvertes) pour l'entreprise propriétaire ou exploitante du site : procédure collective
+(sauvegarde, redressement, liquidation), vente ou cession, radiation. L'entreprise est identifiée par son SIREN :
+exploitants ICPE (Géorisques) et société propriétaire (colonne `siren_proprietaire` du CSV ou saisie terrain). Seuls
+des SIREN sont utilisés : aucun nom n'est repris des annonces, la dénomination d'une entreprise individuelle étant le
+nom d'une personne. Le BODACC peut être testé dans Données → Tester la connexion.
+
 ### Calendrier des financements
 
 Éditable dans **Horloge ZAN → Modifier le calendrier** (formulaire ou JSON avancé, validé avant enregistrement).

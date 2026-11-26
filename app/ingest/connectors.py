@@ -483,7 +483,16 @@ def _icpe_fields(items: list[dict], today: str) -> dict:
     etat = str(it.get("etatActivite") or it.get("etat_activite") or "").lower()
     if etat:
         out["icpe_statut"] = "cessee" if ("cess" in etat or "arr" in etat) else "en_activite"
+    sirens = sorted({siren_of(x.get("siret") or x.get("numeroSiret") or x.get("siren")) for x in items} - {None})
+    if sirens:  # identifiants d'entreprises seulement (pas de raison sociale : elle peut être un nom de personne)
+        out["siren_exploitants"] = sirens[:10]
     return out
+
+
+def siren_of(v) -> str | None:
+    """SIREN (9 chiffres) extrait d'un SIRET ou d'un SIREN, sinon None."""
+    d = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return d[:9] if len(d) in (9, 14) else None
 
 
 def search_radius(surface_m2) -> int:
