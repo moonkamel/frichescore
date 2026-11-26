@@ -188,6 +188,9 @@ def recommendations(rec: Record, ur: dict | None = None) -> list[dict]:
     if ur and ur["market"]["marchand"] and ur["market"]["bilan_net_bas"] < 0 < ur["market"]["bilan_net_haut"]:
         r.append({"priorite": "basse", "etude": "Étude de marché et pré-bilan d'aménagement",
                   "motif": "Bilan d'opération à cheval sur l'équilibre"})
+    if rec.get("projet_connu"):
+        r.insert(0, {"priorite": "haute", "etude": "Contacter la collectivité : un projet est déjà identifié sur ce site",
+                     "motif": "Statut Cartofriches « friche avec projet » — éviter d'étudier un site déjà engagé"})
     if rec.get("ppri") in ("rouge", "bleu"):
         r.append({"priorite": "moyenne", "etude": "Consultation de la DDT(M) sur le règlement du PPRi",
                   "motif": f"Site en zone {rec.get('ppri')} du PPRi"})

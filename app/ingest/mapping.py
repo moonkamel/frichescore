@@ -33,6 +33,7 @@ ALIASES = {
     "activite_libelle": "activite_passee",
     "urba_zone_type": "plu_zone",
     "proprio_nombre": "nb_proprietaires",
+    "proprio_personne": "proprietaire_type",
 }
 
 TYPE_MAP = {
@@ -53,7 +54,8 @@ ENUM_SYNONYMS = {
     "statut_cartofriches": {"verifiee": "verifiee", "verifie": "verifiee", "non verifiee": "non_verifiee",
                             "friche avec projet": "verifiee", "friche sans projet": "verifiee", "friche potentielle": "non_verifiee"},
     "pollution_constatee": {"aucune": "aucune", "non": "aucune", "moderee": "moderee", "faible": "moderee", "forte": "forte", "importante": "forte"},
-    "proprietaire_type": {"publique": "public", "privee": "prive", "privé": "prive"},
+    "proprietaire_type": {"publique": "public", "privee": "prive", "personne physique": "prive",
+                          "personne physique, personne morale": "mixte", "personne morale, personne physique": "mixte"},
     "desserte_tc": {"bonne": "forte", "mauvaise": "faible"},
     "demande_activite": {"elevee": "forte"},
     "deficit_equipements": {"eleve": "fort"},

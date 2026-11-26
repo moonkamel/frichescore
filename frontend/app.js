@@ -1067,11 +1067,19 @@ async function renderDonnees() {
     $("#ct-out").innerHTML = `<div class="loading">Appel en cours (jusqu'à ${+$("#ct-timeout").value || urls.timeout_s || 60} s par tentative, nouvelle tentative en cas de délai dépassé)…</div>`;
     try {
       const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null, timeout: +$("#ct-timeout").value || null });
-      $("#ct-out").innerHTML = `<div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
+      S.lastConnTest = r;
+      $("#ct-out").innerHTML = `<div class="row" style="justify-content:flex-end;gap:6px;margin-bottom:6px"><button class="btn sm" id="ct-copy" style="flex:0;white-space:nowrap">Copier le rapport complet</button><button class="btn sm sec" id="ct-dl" style="flex:0;white-space:nowrap">Télécharger (JSON)</button></div>
+        <div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
         ${r.diagnostic_reseau ? netDiag(r.diagnostic_reseau) : ""}
         ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
         ${r.champs ? champsHtml(r.champs) : ""}
         ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;
+      const txt = JSON.stringify(r, null, 1);
+      $("#ct-copy").onclick = async () => {
+        try { await navigator.clipboard.writeText(txt); toast("Rapport copié : collez-le (Ctrl + V) dans la conversation."); }
+        catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Rapport copié."); }
+      };
+      $("#ct-dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "application/json" })); a.download = `diagnostic_${r.source}.json`; a.click(); };
     } catch (e) { $("#ct-out").innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
   };
   $("#cf-go").onclick = async () => {

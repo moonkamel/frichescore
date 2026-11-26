@@ -28,6 +28,7 @@ import csv
 import io
 import json
 import os
+import re
 import socket
 import ssl
 import statistics
@@ -43,7 +44,17 @@ from .mapping import row_to_record
 # Adresse et paramètres alignés sur le client officiel du Cerema (paquet PyPI « apifoncier2 ») :
 # base https://apidf-preprod.cerema.fr, page_size=500, délai 60 s. Le point d'accès /cartofriches/friches ne
 # renvoie pas de géométrie ; /cartofriches/geofriches renvoie le même contenu en GeoJSON, avec le contour du site.
-CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches/geofriches")
+# FricheScore interroge les DEUX et les fusionne par identifiant : attributs complets (/friches) + position (/geofriches).
+CARTOFRICHES_URL = os.environ.get("CARTOFRICHES_URL", "https://apidf-preprod.cerema.fr/cartofriches")
+
+
+def cartofriches_urls(base: str | None = None) -> tuple[str, str]:
+    """Adresses (attributs, géométrie) à partir de la base ou de l'un des deux points d'accès."""
+    b = (base or CARTOFRICHES_URL).rstrip("/")
+    for suffix in ("/geofriches", "/friches"):
+        if b.endswith(suffix):
+            b = b[: -len(suffix)]
+    return b + "/friches", b + "/geofriches"
 CARTOFRICHES_PAGE_SIZE = 500
 GEORISQUES_URL = os.environ.get("GEORISQUES_URL", "https://www.georisques.gouv.fr/api/v1")
 GEODVF_URL = os.environ.get("GEODVF_URL", "https://files.data.gouv.fr/geo-dvf/latest/csv")
@@ -240,6 +251,8 @@ def parse_cartofriches(payload) -> list[dict]:
         out = []
         for f in payload.get("features") or []:
             props = dict(f.get("properties") or {})
+            if f.get("id") is not None:  # GeoJSON : l'identifiant est porté par l'objet, pas par ses propriétés
+                props.setdefault("site_id", f.get("id"))
             geom = f.get("geometry") or {}
             coords = geom.get("coordinates")
             if geom.get("type") == "Point" and coords:
@@ -278,6 +291,7 @@ def cartofriches_records(rows: list[dict]) -> tuple[list[Record], list[str]]:
             warnings.append(f"friche n°{i} ignorée : identifiant absent")
             continue
         rec.values["id"] = f"CF-{rec.get('id')}"
+        _derive_cartofriches(rec, row, today)
         for src_key, key in (("l_basol", "basol"), ("l_basias", "basias_count"), ("l_icpe", "icpe_count")):
             if src_key in row:
                 v = row.get(src_key)
@@ -290,19 +304,115 @@ def cartofriches_records(rows: list[dict]) -> tuple[list[Record], list[str]]:
     return out, warnings
 
 
-def fetch_cartofriches(code_insee: str, base_url: str | None = None) -> tuple[list[Record], list[str]]:
+def _fetch_pages(c: httpx.Client, url: str, params: dict) -> tuple[list[dict], str, int]:
     rows: list[dict] = []
-    url = base_url or CARTOFRICHES_URL
-    params: dict | None = {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE}
+    full, st = url, 0
+    for _ in range(MAX_PAGES):
+        data, full_, st = _get(c, url, params)
+        full = full if rows else full_
+        rows += parse_cartofriches(data)
+        url = data.get("next") if isinstance(data, dict) else None
+        params = None
+        if not url:
+            break
+    return rows, full, st
+
+
+def _row_id(r: dict):
+    v = r.get("site_id") or r.get("id")
+    return str(v) if v not in (None, "") else None
+
+
+def _row_key(r: dict):
+    try:
+        surf = round(float(r.get("site_surface") or r.get("unite_fonciere_surface") or 0))
+    except (TypeError, ValueError):
+        surf = 0
+    return (str(r.get("site_nom") or "").strip().lower(), str(r.get("comm_insee") or ""), surf)
+
+
+def merge_cartofriches(attr_rows: list[dict], geo_rows: list[dict]) -> list[dict]:
+    """Fusionne attributs (/friches) et géométrie (/geofriches) : par identifiant de site, à défaut par
+    (nom, commune, surface). Ne crée jamais de doublon : un site de /geofriches non apparié n'est ajouté
+    que s'il n'existe pas d'équivalent côté attributs."""
+    if not attr_rows:
+        return list(geo_rows)
+    if not geo_rows:
+        return list(attr_rows)
+    by_id = {_row_id(g): g for g in geo_rows if _row_id(g)}
+    by_key: dict = {}
+    for g in geo_rows:
+        by_key.setdefault(_row_key(g), []).append(g)
+    used = set()
+    out = []
+    for r in attr_rows:
+        g = by_id.get(_row_id(r))
+        if g is None or id(g) in used:
+            cands = [x for x in by_key.get(_row_key(r), []) if id(x) not in used]
+            g = cands[0] if cands else None
+        if g is not None:
+            used.add(id(g))
+            r = {**{k: v for k, v in g.items() if v not in (None, "")}, **{k: v for k, v in r.items() if v not in (None, "")}}
+        out.append(r)
+    attr_ids = {_row_id(r) for r in attr_rows}
+    attr_keys = {_row_key(r) for r in attr_rows}
+    out += [g for g in geo_rows if id(g) not in used and _row_id(g) not in attr_ids and _row_key(g) not in attr_keys]
+    return out
+
+
+def _derive_cartofriches(rec: Record, row: dict, today: str) -> None:
+    """Exploite les champs propres à Cartofriches observés sur l'API réelle."""
+    src = "API Cartofriches (Cerema)"
+    refcad = row.get("unite_fonciere_refcad")
+    if refcad:
+        if isinstance(refcad, str):
+            refcad = [x for x in re.split(r"[\[\]',;| ]+", refcad) if x]
+        if isinstance(refcad, list) and refcad:
+            rec.set("nb_parcelles", len(refcad), Provenance(f"{src} — références cadastrales", today, "eleve"))
+    statut = str(row.get("site_statut") or "").lower()
+    if "avec projet" in statut:
+        rec.set("projet_connu", True, Provenance(src, today, "moyen", "statut « friche avec projet »"))
+    elif "sans projet" in statut:
+        rec.set("projet_connu", False, Provenance(src, today, "moyen", "statut « friche sans projet »"))
+    origine = " — ".join(str(row.get(k)) for k in ("source_nom", "nature") if row.get(k))
+    if origine:
+        rec.set("source_inventaire", origine, Provenance(src, today, "moyen"))
+    sn = str(row.get("source_nom") or "").lower()
+    if "basias" in sn or "basol" in sn:
+        # Signal d'usage passé potentiellement polluant : rend la friche évaluable, sans préjuger du résultat
+        # Géorisques (qui renseigne ensuite basol / basias_count / icpe_count avec leur propre provenance).
+        verif = "vérifié" in sn and "non vérifié" not in sn
+        if not rec.has("activite_passee"):
+            rec.set("activite_passee", "ancien site BASIAS/BASOL (repéré par Cartofriches)",
+                    Provenance(src, today, "moyen" if verif else "faible", row.get("source_nom")))
+    nature = str(row.get("nature") or "").lower()
+    if "non vérifi" in nature and rec.has("statut_cartofriches") and rec.get("statut_cartofriches") == "verifiee":
+        rec.set("statut_cartofriches", "non_verifiee", Provenance(src, today, "moyen", f"nature : {row.get('nature')}"))
+
+
+def fetch_cartofriches(code_insee: str, base_url: str | None = None) -> tuple[list[Record], list[str]]:
+    """Attributs + géométrie, fusionnés. Si l'un des deux points d'accès échoue, l'autre suffit (avec avertissement)."""
+    u_attr, u_geo = cartofriches_urls(base_url)
+    params = {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE}
+    warns: list[str] = []
+    attr: list[dict] = []
+    geo: list[dict] = []
+    errors = []
     with _client() as c:
-        for _ in range(MAX_PAGES):
-            data, _full, _st = _get(c, url, params)
-            rows += parse_cartofriches(data)
-            url = data.get("next") if isinstance(data, dict) else None
-            params = None
-            if not url:
-                break
-    return cartofriches_records(rows)
+        try:
+            attr, _f, _s = _fetch_pages(c, u_attr, dict(params))
+        except ConnectorError as e:
+            errors.append(e)
+            warns.append(f"attributs Cartofriches indisponibles ({e.message}) : seuls les champs de /geofriches sont importés")
+        try:
+            geo, _f, _s = _fetch_pages(c, u_geo, dict(params))
+        except ConnectorError as e:
+            errors.append(e)
+            warns.append(f"géométrie Cartofriches indisponible ({e.message}) : friches importées sans coordonnées")
+    if len(errors) == 2:
+        raise errors[0]
+    recs, w2 = cartofriches_records(merge_cartofriches(attr, geo))
+    return recs, warns + w2
 
 
 def field_report(rows: list[dict]) -> dict:
@@ -499,17 +609,35 @@ def test_connection(source: str, code_insee: str = "59350", lat: float = 50.6329
     try:
         with _client(timeout) as c:
             if source == "cartofriches":
-                url = base_url or CARTOFRICHES_URL
-                data, full, st = _get(c, url, {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE})
-                rows = parse_cartofriches(data)
-                recs, warns = cartofriches_records(rows)
-                res.update(url=full, http_status=st, apercu_brut=json.dumps(data, ensure_ascii=False)[:3000],
-                           resultat={"friches_page_1": len(rows), "friches_exploitables": len(recs),
-                                     "page_suivante": bool(isinstance(data, dict) and data.get("next")),
+                u_attr, u_geo = cartofriches_urls(base_url)
+                params = {"code_insee": code_insee, "page_size": CARTOFRICHES_PAGE_SIZE}
+                parts, errs, raw = {}, {}, {}
+                attr, geo, last = [], [], (None, None)
+                for name, u in (("friches", u_attr), ("geofriches", u_geo)):
+                    try:
+                        data, full, st = _get(c, u, dict(params))
+                        rows = parse_cartofriches(data)
+                        parts[name] = {"url": full, "http": st, "friches": len(rows),
+                                       "page_suivante": bool(isinstance(data, dict) and data.get("next"))}
+                        raw[name] = json.dumps(data, ensure_ascii=False)[:1500]
+                        last = (full, st)
+                        if name == "friches":
+                            attr = rows
+                        else:
+                            geo = rows
+                    except ConnectorError as e:
+                        errs[name] = e.message + (f" [{e.url}]" if e.url else "")
+                if not parts:
+                    raise ConnectorError("aucun des deux points d'accès Cartofriches n'a répondu : " + " ; ".join(errs.values()))
+                merged = merge_cartofriches(attr, geo)
+                recs, warns = cartofriches_records(merged)
+                res.update(url=last[0], http_status=last[1], apercu_brut=json.dumps(raw, ensure_ascii=False)[:3000],
+                           resultat={"points_d_acces": parts, "erreurs": errs, "friches_fusionnees": len(merged),
+                                     "friches_exploitables": len(recs),
                                      "avec_coordonnees": sum(1 for r in recs if r.has("lat") and r.has("lon")),
-                                     "exemple_interprete": recs[0].values if recs else None,
-                                     "avertissements": warns[:5]},
-                           champs=field_report(rows))
+                                     "avec_surface": sum(1 for r in recs if r.has("surface_m2")),
+                                     "exemple_interprete": recs[0].values if recs else None, "avertissements": warns[:5]},
+                           champs=field_report(merged))
             elif source == "georisques":
                 base = (base_url or GEORISQUES_URL).rstrip("/")
                 counts, errs, raw, last = {}, {}, {}, (None, None)
@@ -540,7 +668,7 @@ def test_connection(source: str, code_insee: str = "59350", lat: float = 50.6329
         res.update(erreur=e.message, url=res["url"] or e.url, http_status=res["http_status"] or e.status,
                    apercu_brut=res["apercu_brut"] or e.body)
         if e.status is None and TRANSPORT is None:  # échec réseau (pas une erreur HTTP) : diagnostic automatique
-            target = e.url or base_url or {"cartofriches": CARTOFRICHES_URL, "georisques": GEORISQUES_URL}.get(source, GEODVF_URL)
+            target = e.url or base_url or {"cartofriches": cartofriches_urls()[0], "georisques": GEORISQUES_URL}.get(source, GEODVF_URL)
             try:
                 res["diagnostic_reseau"] = network_diagnostic(target)
             except Exception as ex:  # noqa: BLE001

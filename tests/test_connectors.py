@@ -45,7 +45,8 @@ def test_cartofriches_pagination_et_parsing(mock):
     assert a.get("bati_etat") == "degrade"
     assert a.get("plu_zone") == "U"
     assert a.get("basias_count") == 2 and a.prov["basias_count"].confiance == "faible"
-    assert a.get("basol") is False and a.get("icpe_count") == 1
+    assert not a.has("basol")  # champ vide : « non renseigné », jamais « pas de BASOL »
+    assert a.get("icpe_count") == 1
     assert a.get("statut_cartofriches") == "verifiee"
     assert recs[1].get("surface_m2") == 2300  # « 2 300 » toléré
     assert recs[1].get("statut_cartofriches") == "non_verifiee"
@@ -195,12 +196,12 @@ def test_nouvelle_tentative_apres_delai(mock):
         return httpx.Response(200, json=fx("cartofriches_page2.json"))
     mock(h)
     recs, _ = K.fetch_cartofriches("59512")
-    assert calls["n"] == 2 and len(recs) == 1
+    assert calls["n"] == 3 and len(recs) == 1  # 1 délai dépassé + /friches + /geofriches, fusionnés sans doublon
 
 
 def test_adresse_cartofriches_alignee_sur_client_officiel():
-    # /geofriches : même contenu que /friches, avec la géométrie (le client officiel expose les deux)
-    assert K.CARTOFRICHES_URL.endswith("/cartofriches/geofriches") or "CARTOFRICHES_URL" in __import__("os").environ
+    assert K.cartofriches_urls("https://x/cartofriches/geofriches") == ("https://x/cartofriches/friches", "https://x/cartofriches/geofriches")
+    assert K.cartofriches_urls("https://x/cartofriches/") == ("https://x/cartofriches/friches", "https://x/cartofriches/geofriches")
 
 
 def test_diagnostic_reseau_dns_inconnu():
@@ -251,3 +252,33 @@ def test_surface_du_site_prioritaire_et_inventaire_des_champs():
     rep = K.field_report(rows)
     assert "champ_inconnu" in rep["colonnes_non_reconnues"] and rep["valeurs_distinctes"]["site_type"] == ["Friche X"]
     assert rep["taux_remplissage"]["unite_fonciere_surface"] == "1/2"
+
+
+GEO_REEL = {"type": "FeatureCollection", "features": [
+    {"type": "Feature", "id": "59350_10190", "geometry": {"type": "MultiPolygon", "coordinates": [[[[3.07, 50.61], [3.08, 50.61], [3.08, 50.62]]]]},
+     "properties": {"site_nom": "Teinturerie", "site_type": "inconnu", "site_adresse": None, "site_statut": "friche avec projet",
+                    "comm_nom": "LILLE", "comm_insee": "59350", "dep": "59", "proprio_personne": "personne physique, personne morale",
+                    "unite_fonciere_surface": 234.17, "unite_fonciere_refcad": ["59350000IK0025", "59350000IK0026"],
+                    "source_nom": "Site Basias ou Basol non vérifié par le Cerema", "nature": "MTE non vérifié",
+                    "urba_zone_type": "U", "longitude": 3.0745, "latitude": 50.6166}}]}
+
+
+def test_champs_reels_geofriches():
+    """Format observé sur l'API réelle (novembre 2026) : identifiant porté par l'objet GeoJSON."""
+    recs, warns = K.cartofriches_records(K.parse_cartofriches(GEO_REEL))
+    assert not warns
+    r = recs[0]
+    assert r.get("id") == "CF-59350_10190" and r.get("lat") == 50.6166 and r.get("lon") == 3.0745
+    assert r.get("surface_m2") == 234.17 and r.get("nb_parcelles") == 2
+    assert r.get("proprietaire_type") == "mixte" and r.get("projet_connu") is True
+    assert r.get("statut_cartofriches") == "verifiee" or r.get("statut_cartofriches") == "non_verifiee"
+    assert "BASIAS" in r.get("activite_passee") and r.prov["activite_passee"].confiance == "faible"
+    from app.scoring.engine import check_evaluable
+    assert check_evaluable(r) == []
+
+
+def test_fusion_sans_doublon_quand_identifiants_differents():
+    attr = [{"site_id": "A", "site_nom": "Usine", "comm_insee": "59350", "site_surface": 1000, "site_type": "friche industrielle"}]
+    geo = [{"site_id": "999", "site_nom": "Usine", "comm_insee": "59350", "unite_fonciere_surface": 1000, "longitude": 3.0, "latitude": 50.0}]
+    m = K.merge_cartofriches(attr, geo)
+    assert len(m) == 1 and m[0]["latitude"] == 50.0 and m[0]["site_id"] == "A"

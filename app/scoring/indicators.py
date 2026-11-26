@@ -22,6 +22,8 @@ CATALOG: dict[str, tuple] = {
                      "habitat", "tertiaire", "carriere", "decharge", "logistique", "agricole", "inconnu"]),
     "statut_cartofriches": ("Statut Cartofriches", "enum", "Cartofriches", "eleve", ["verifiee", "non_verifiee"]),
     "activite_passee": ("Activité passée", "str", "Cartofriches / BASIAS", "moyen", None),
+    "projet_connu": ("Projet déjà identifié sur le site", "bool", "Cartofriches (statut « friche avec projet »)", "moyen", None),
+    "source_inventaire": ("Origine du repérage de la friche", "str", "Cartofriches (champs source_nom / nature)", "moyen", None),
     # Bâti / foncier / géométrie
     "bati_emprise_m2": ("Emprise bâtie (m²)", "float", "BD TOPO / cadastre", "moyen", None),
     "bati_etat": ("État du bâti", "enum", "Cartofriches / visite", "faible", ["bon", "moyen", "degrade", "ruine", "inconnu"]),
