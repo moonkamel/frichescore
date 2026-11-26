@@ -515,23 +515,50 @@ def calendar_save(data: dict) -> list[str]:
 
 
 # -------------------------------------------------------------- connecteurs
-def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True) -> dict:
+def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = True, progress=None) -> dict:
+    """Import d'un périmètre. `progress(etape, fait, total)` est appelé au fil de l'eau.
+    Les bases Géorisques sont interrogées en parallèle (6 friches à la fois)."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def tick(etape, fait=0, total=0):
+        if progress:
+            progress(etape, fait, total)
+
     report = {"importees": 0, "communes_dvf": 0, "erreurs": [], "avertissements": []}
-    for code in codes[:50]:
+    codes = codes[:50]
+    all_recs = []
+    for i, code in enumerate(codes):
+        tick(f"Cartofriches : commune {code}", i, len(codes))
         try:
             recs, warns = connectors.fetch_cartofriches(code)
             report["avertissements"] += [f"{code} : {w}" for w in warns]
+            all_recs += recs
         except connectors.ConnectorError as e:
             report["erreurs"].append(f"{code} : Cartofriches — {e.message}")
-            continue
-        for rec in recs:
-            if georisques:
-                _, errs = connectors.enrich_georisques(rec)
-                report["erreurs"] += [f"{rec.get('id')} : {e}" for e in errs]
-            db.upsert_friche(rec, "cartofriches")
-            report["importees"] += 1
-        if dvf and recs:
-            y = date.today().year
+    if georisques and all_recs:
+        done = 0
+        tick("Géorisques : bases de pollution", 0, len(all_recs))
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futs = {ex.submit(connectors.enrich_georisques, r): r for r in all_recs}
+            for f in as_completed(futs):
+                rec = futs[f]
+                try:
+                    _, errs = f.result()
+                    report["erreurs"] += [f"{rec.get('id')} : {e}" for e in errs]
+                except Exception as e:  # noqa: BLE001 — une friche en échec ne bloque pas les autres
+                    report["erreurs"].append(f"{rec.get('id')} : Géorisques — {type(e).__name__}")
+                done += 1
+                if done % 5 == 0 or done == len(all_recs):
+                    tick("Géorisques : bases de pollution", done, len(all_recs))
+    tick("Enregistrement", 0, 1)
+    for rec in all_recs:
+        db.upsert_friche(rec, "cartofriches")
+    report["importees"] = len(all_recs)
+    if dvf:
+        y = date.today().year
+        found = sorted({r.get("code_insee") for r in all_recs if r.get("code_insee")})
+        for i, code in enumerate(found):
+            tick(f"DVF : prix de marché ({code})", i, len(found))
             ind, errs = connectors.fetch_dvf(code, [y - 4, y - 3, y - 2, y - 1])
             errs = [e for e in errs if "404" not in e or str(y - 1) not in e]  # dernière année pas toujours publiée
             report["erreurs"] += [f"{code} : {e}" for e in errs]

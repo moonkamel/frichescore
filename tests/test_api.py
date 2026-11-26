@@ -118,3 +118,39 @@ def test_friche_reelle_n_herite_pas_de_la_demo(c):
     assert not site.has("zonage_abc")  # indicateur communal de démo non hérité
     demo = next(iter(db.load_sites({"type": "communes", "values": ["59350"]}).values()))
     assert demo.has("zonage_abc") or demo.get("_origine") != "demo"
+
+
+def test_import_perimetre_en_tache_de_fond(c, monkeypatch):
+    import time
+    from app.ingest import connectors as K
+    from app.scoring.record import Provenance, Record
+
+    def fake_fetch(code, base_url=None):
+        out = []
+        for i in range(12):
+            r = Record()
+            p = Provenance("API Cartofriches (Cerema)", "2026-11-26", "moyen")
+            for k, v in {"id": f"CF-{code}_{i}", "nom": f"Site {i}", "code_insee": code, "departement": code[:2],
+                         "surface_m2": 3000 + i, "lat": 50.6, "lon": 3.05, "activite_passee": "BASIAS"}.items():
+                r.set(k, v, p)
+            out.append(r)
+        return out, []
+
+    def fake_geo(rec, rayon_m=None, base_url=None):
+        rec.set("basias_count", 1, Provenance("CASIAS", "2026-11-26", "faible"))
+        return rec, []
+
+    monkeypatch.setattr(K, "fetch_cartofriches", fake_fetch)
+    monkeypatch.setattr(K, "enrich_georisques", fake_geo)
+    monkeypatch.setattr(K, "fetch_dvf", lambda code, years, base_url=None: ({"prix_m2_logement": 3500, "_annees": [2024]}, []))
+    job = c.post("/api/ingest/cartofriches", json={"codes_insee": ["59350", "59512"]}).json()
+    for _ in range(100):
+        st = c.get(f"/api/ingest/jobs/{job['id']}").json()
+        if st["etat"] != "en_cours":
+            break
+        time.sleep(0.05)
+    assert st["etat"] == "termine", st
+    assert st["rapport"]["importees"] == 24 and st["rapport"]["communes_dvf"] == 2
+    s = c.post("/api/scores", json={"type": "ids", "values": ["CF-59350_0", "CF-59512_11"]}).json()["sites"]
+    assert len(s) == 2 and all(x["evaluable"] for x in s)
+    assert c.get("/api/ingest/jobs/inconnu").status_code == 404

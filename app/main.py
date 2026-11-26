@@ -264,11 +264,44 @@ class CartoReq(BaseModel):
     dvf: bool = True
 
 
+_JOBS: dict[str, dict] = {}
+
+
 @app.post("/api/ingest/cartofriches")
 def ingest_cartofriches(r: CartoReq):
-    """Interroge Cartofriches, puis Géorisques et DVF. Nécessite un accès réseau ;
-    les échecs sont rapportés sans interrompre l'import."""
-    return service.ingest_cartofriches([c.strip() for c in r.codes_insee if c.strip()], r.georisques, r.dvf)
+    """Lance l'import en tâche de fond (Cartofriches, puis Géorisques et DVF) et renvoie
+    un identifiant de suivi : GET /api/ingest/jobs/{id}. Les échecs sont rapportés sans interrompre l'import."""
+    import threading
+    import time as _t
+    import uuid
+    codes = [c.strip() for c in r.codes_insee if c.strip()]
+    if not codes:
+        raise HTTPException(400, "aucun code INSEE")
+    jid = uuid.uuid4().hex[:12]
+    job = {"id": jid, "etat": "en_cours", "etape": "Démarrage", "fait": 0, "total": 0, "rapport": None,
+           "erreur": None, "debut": _t.time(), "duree_s": None}
+    _JOBS[jid] = job
+
+    def prog(etape, fait, total):
+        job.update(etape=etape, fait=fait, total=total)
+
+    def run():
+        try:
+            job["rapport"] = service.ingest_cartofriches(codes, r.georisques, r.dvf, prog)
+            job["etat"] = "termine"
+        except Exception as e:  # noqa: BLE001
+            job.update(etat="erreur", erreur=f"{type(e).__name__} : {e}")
+        job["duree_s"] = round(_t.time() - job["debut"])
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+@app.get("/api/ingest/jobs/{jid}")
+def ingest_job(jid: str):
+    if jid not in _JOBS:
+        raise HTTPException(404, "tâche inconnue (le serveur a peut-être redémarré)")
+    return _JOBS[jid]
 
 
 class ConnTestReq(BaseModel):
