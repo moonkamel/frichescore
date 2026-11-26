@@ -117,7 +117,8 @@ def compute_cost(t: Tracker, usage: str, hyp: dict | None = None) -> dict:
     v_lo, v_hi = C.COST["viabilisation"][usage]
     add("Viabilisation / VRD", surf * v_lo, surf * v_hi, None, "viabilisation")
     if t.rec.get("site_extension"):
-        add("Extension des réseaux (site en extension urbaine)", surf * 15, surf * 40, "site_extension", "viabilisation")
+        e_lo, e_hi = C.COST["extension_reseaux_m2"]
+        add("Extension des réseaux (site en extension urbaine)", surf * e_lo, surf * e_hi, "site_extension", "viabilisation")
     if usage == "photovoltaique":
         d = float(t.read("distance_poste_source_km", 10, 1))
         r_lo, r_hi = C.COST["raccordement_pv_eur_km"]

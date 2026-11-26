@@ -107,7 +107,8 @@ def meta():
     return {"usages": C.USAGES, "dimensions": C.DIMENSIONS, "profiles": C.PROFILES,
             "presets": {k: v["label"] for k, v in PRESETS.items()}, "stages": service.STAGES,
             "catalog": service.catalog(), "perimeters": db.perimeters(),
-            "constants": {"confidence_max_penalty": C.CONFIDENCE_MAX_PENALTY, "blocker_cap": C.BLOCKER_CAP}}
+            "constants": {"confidence_max_penalty": C.CONFIDENCE_MAX_PENALTY, "blocker_cap": C.BLOCKER_CAP,
+                          "piegeux_d2_max": C.PIEGEUX_D2_MAX}}
 
 
 @app.post("/api/scores")
@@ -241,40 +242,119 @@ def import_template():
                     headers={"Content-Disposition": 'attachment; filename="frichescore_modele_import.csv"'})
 
 
+@app.get("/api/import/dictionnaire.csv")
+def import_dictionary():
+    return Response("\ufeff" + service.csv_dictionary(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="frichescore_dictionnaire_colonnes.csv"'})
+
+
 @app.post("/api/import/csv")
-async def import_csv(file: UploadFile = File(...), source: str = Form("import CSV"), date: str | None = Form(None)):
+async def import_csv(file: UploadFile = File(...), source: str = Form("import CSV"), date: str | None = Form(None),
+                     dry_run: bool = Form(False)):
     raw = await file.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    return service.import_csv(text, source, date)
+    if len(raw) > 30 * 1024 * 1024:
+        raise HTTPException(413, "fichier trop volumineux (30 Mo maximum)")
+    text, enc = service.decode_bytes(raw)
+    return service.import_csv(text, source or file.filename, date or None, dry_run, enc)
 
 
 class CartoReq(BaseModel):
     codes_insee: list[str]
     georisques: bool = True
+    dvf: bool = True
 
 
 @app.post("/api/ingest/cartofriches")
 def ingest_cartofriches(r: CartoReq):
-    """Interroge l'API Cartofriches puis Géorisques. Nécessite un accès réseau."""
-    report = {"importees": 0, "erreurs": []}
-    for code in r.codes_insee[:50]:
-        try:
-            recs = connectors.fetch_cartofriches(code)
-        except Exception as e:  # noqa: BLE001 — on remonte l'erreur réseau telle quelle
-            report["erreurs"].append(f"{code} : Cartofriches indisponible ({type(e).__name__}: {e})")
-            continue
-        for rec in recs:
-            if r.georisques:
-                try:
-                    connectors.enrich_georisques(rec)
-                except Exception as e:  # noqa: BLE001
-                    report["erreurs"].append(f"{rec.get('id')} : Géorisques indisponible ({type(e).__name__})")
-            db.upsert_friche(rec, "cartofriches")
-            report["importees"] += 1
-    return report
+    """Interroge Cartofriches, puis Géorisques et DVF. Nécessite un accès réseau ;
+    les échecs sont rapportés sans interrompre l'import."""
+    return service.ingest_cartofriches([c.strip() for c in r.codes_insee if c.strip()], r.georisques, r.dvf)
+
+
+class ConnTestReq(BaseModel):
+    source: str
+    code_insee: str = "59350"
+    lat: float = 50.6329
+    lon: float = 3.0586
+    base_url: str | None = None
+
+
+@app.post("/api/connecteurs/test")
+def connector_test(r: ConnTestReq):
+    if r.source not in ("cartofriches", "georisques", "dvf"):
+        raise HTTPException(400, "source inconnue (cartofriches, georisques, dvf)")
+    if r.base_url and not r.base_url.startswith(("http://", "https://")):
+        raise HTTPException(400, "l'adresse doit commencer par http:// ou https://")
+    return connectors.test_connection(r.source, r.code_insee.strip(), r.lat, r.lon, r.base_url or None)
+
+
+@app.get("/api/connecteurs")
+def connector_info():
+    return {"cartofriches": connectors.CARTOFRICHES_URL, "georisques": connectors.GEORISQUES_URL,
+            "dvf": connectors.GEODVF_URL, "timeout_s": connectors.TIMEOUT}
+
+
+# ------------------------------------------------------------- paramètres
+class ParamChange(BaseModel):
+    path: str
+    value: Any = None
+    note: str | None = None
+
+
+class ParamsReq(BaseModel):
+    changes: list[ParamChange]
+
+
+@app.get("/api/parametres")
+def params_get():
+    return service.params_view()
+
+
+@app.put("/api/parametres")
+def params_put(r: ParamsReq):
+    return service.params_save([c.model_dump() for c in r.changes])
+
+
+@app.post("/api/parametres/reset")
+def params_reset(path: str | None = None):
+    service.params_reset(path)
+    return service.params_view()
+
+
+@app.get("/api/parametres/export")
+def params_export():
+    import json as _json
+    return Response(_json.dumps(service.params_export(), ensure_ascii=False, indent=2), media_type="application/json",
+                    headers={"Content-Disposition": 'attachment; filename="frichescore_parametres.json"'})
+
+
+@app.post("/api/parametres/import")
+def params_import(data: dict):
+    try:
+        return service.params_import(data)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+# -------------------------------------------------------------- calendrier
+@app.get("/api/calendrier")
+def calendar_get():
+    return service.calendar_view()
+
+
+@app.put("/api/calendrier")
+def calendar_put(data: dict):
+    errs = service.calendar_save(data)
+    if errs:
+        raise HTTPException(422, {"erreurs": errs})
+    return service.calendar_view()
+
+
+@app.post("/api/calendrier/reset")
+def calendar_reset():
+    from .scoring import calendar as cal
+    cal.reset()
+    return service.calendar_view()
 
 
 @app.post("/api/demo/reset")

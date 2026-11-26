@@ -94,7 +94,7 @@ def test_parsers_connecteurs():
                                                             "site_surface": 5000, "site_type": "friche industrielle",
                                                             "l_basias": "NPC1|NPC2"},
                                              "geometry": {"type": "Point", "coordinates": [3.0, 50.6]}}]})
-    recs = cartofriches_records(rows)
+    recs, _w = cartofriches_records(rows)
     assert recs[0].get("id") == "CF-59350_1" and recs[0].get("basias_count") == 2 and recs[0].get("lat") == 50.6
     assert recs[0].prov["basias_count"].confiance == "faible"
     csv1 = ("id_mutation,nature_mutation,valeur_fonciere,type_local,surface_reelle_bati\n"

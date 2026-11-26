@@ -75,7 +75,48 @@ COST = {
         "inconnue": (0, 60, 0.0, 0.4),
     },
     "foncier_multi_proprio_m2": (5, 15),
+    "extension_reseaux_m2": (15, 40),
 }
+
+# Friction réglementaire : (points de friction, mois de délai) par contrainte
+FRICTION = {
+    "zone_humide_avere": (25, 12),
+    "zone_humide_probable": (12, 6),
+    "zone_humide_non_verifiee": (4, 2),
+    "captage_immediat": (40, 24),
+    "captage_rapproche": (20, 6),
+    "captage_eloigne": (6, 2),
+    "ppri_rouge": (30, 6),
+    "ppri_bleu": (10, 3),
+    "pprt": (15, 6),
+    "natura2000": (15, 6),
+    "natura2000_renaturation": (3, 6),
+    "znieff": (6, 4),
+    "abf": (8, 3),
+    "loi_littoral": (10, 6),
+    "etude_impact_systematique": (15, 12),
+    "etude_impact_cas_par_cas": (6, 3),
+    "pv_etude_impact_systematique": (12, 10),
+    "pv_cas_par_cas": (5, 3),
+    "plu_non_renseigne": (8, 6),
+    "plu_modification": (10, 10),
+    "plu_revision": (25, 24),
+    "servitude_par_unite": (3, 2),
+    "icpe_en_activite": (15, 12),
+    "icpe_cessee": (6, 4),
+    "seveso": (10, 6),
+    "proprietaires_plus_de_5": (12, 12),
+    "proprietaires_3_a_5": (6, 6),
+    "proprietaires_inconnus": (4, 3),
+    "extension_zan": (12, 6),
+}
+FRICTION_POINTS_PAR_MOIS_HYPOTHESE = 1.2  # contre-analyse : points de friction par mois de délai ajouté
+
+# Seuils d'évaluation environnementale (annexe R.122-2), en hectares / MWc
+SEUIL_ETUDE_IMPACT_HA = 10
+SEUIL_CAS_PAR_CAS_HA = 5
+SEUIL_PV_ETUDE_IMPACT_MWC = 1.0
+SEUIL_PV_CAS_PAR_CAS_MWC = 0.3
 
 # Délais (mois) liés aux procédures, utilisés par la dimension friction
 BASE_DELAY_MONTHS = 15  # études pré-opérationnelles + autorisations, sans complication

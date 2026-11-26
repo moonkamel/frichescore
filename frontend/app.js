@@ -19,7 +19,7 @@ const DIMS = ["d1", "d2", "d3", "d4", "d5"];
 const DSHORT = { d1: "Potentiel", d2: "Coût", d3: "Friction", d4: "Marché", d5: "Impact" };
 const TABS = [
   ["classement", "Classement"], ["contre", "Contre-analyse"], ["couts", "Coûts cachés"],
-  ["zan", "Horloge ZAN"], ["jumeau", "Jumeau"], ["portfolio", "Portfolio"], ["donnees", "Données"],
+  ["zan", "Horloge ZAN"], ["jumeau", "Jumeau"], ["portfolio", "Portfolio"], ["donnees", "Données"], ["parametres", "Paramètres"],
 ];
 
 /* ------------------------------------------------------------------ outils */
@@ -70,6 +70,14 @@ async function download(path, body, name) {
     toast("Fichier généré.");
   } catch (e) { toast("Erreur : " + e.message, 5000); }
 }
+function saveCSV(name, header, rows) {
+  const q = (v) => { const t = v == null ? "" : String(v); return /[";\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const txt = "\ufeff" + [header, ...rows].map((r) => r.map(q).join(";")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([txt], { type: "text/csv;charset=utf-8" })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const numFR = (v, d = 1) => (v == null || isNaN(v) ? "" : Number(v).toFixed(d).replace(".", ","));
 const ctx = () => ({ perimeter: S.perimeter, usage: S.usage, weights: S.weights, d5: S.d5, profile: S.profile });
 
 /* -------------------------------------------------- score global (miroir Python) */
@@ -166,7 +174,7 @@ function setTab(t) {
   render();
 }
 function render() {
-  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, donnees: renderDonnees }[S.tab];
+  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, donnees: renderDonnees, parametres: renderParametres }[S.tab];
   f();
 }
 function perimeterLabel() {
@@ -600,21 +608,47 @@ function renderContre() {
   $("#run-scn").onclick = async () => {
     $("#scn-out").innerHTML = `<div class="card loading">Calcul du scénario…</div>`;
     const hyp = { ...h }; if (!hyp.usage_force) delete hyp.usage_force;
-    try { st.scn = await api("/api/stress", { ...ctx(), hyp, top_n: st.top_n }); $("#scn-out").innerHTML = scnHtml(st.scn); bindRows("#scn-out"); }
+    try { st.scn = await api("/api/stress", { ...ctx(), hyp, top_n: st.top_n }); $("#scn-out").innerHTML = scnHtml(st.scn); bindRows("#scn-out"); bindContreExports(); }
     catch (e) { $("#scn-out").innerHTML = `<div class="card">Erreur : ${esc(e.message)}</div>`; }
   };
   $("#run-mc").onclick = async () => {
     $("#mc-out").innerHTML = `<div class="card loading">Simulation de ${st.runs} tirages…</div>`;
     const hyp = { ...h }; if (!hyp.usage_force) delete hyp.usage_force;
-    try { st.mc = await api("/api/montecarlo", { ...ctx(), hyp, top_n: st.top_n, runs: st.runs }); $("#mc-out").innerHTML = mcHtml(st.mc); bindRows("#mc-out"); }
+    try { st.mc = await api("/api/montecarlo", { ...ctx(), hyp, top_n: st.top_n, runs: st.runs }); $("#mc-out").innerHTML = mcHtml(st.mc); bindRows("#mc-out"); bindContreExports(); }
     catch (e) { $("#mc-out").innerHTML = `<div class="card">Erreur : ${esc(e.message)}</div>`; }
   };
   bindRows("#main");
+  bindContreExports();
+}
+function hypText(h) {
+  const parts = [];
+  if (h.cout_depollution_mult && h.cout_depollution_mult !== 1) parts.push(`dépollution ×${h.cout_depollution_mult}`);
+  if (h.cout_demolition_mult && h.cout_demolition_mult !== 1) parts.push(`démolition ×${h.cout_demolition_mult}`);
+  if (h.delai_supplementaire_mois) parts.push(`délais +${h.delai_supplementaire_mois} mois`);
+  if (h.prix_marche_pct) parts.push(`marché ${h.prix_marche_pct} %`);
+  if (h.sans_subventions) parts.push("sans subventions");
+  if (h.pessimiste) parts.push("lecture pessimiste");
+  if (h.usage_force) parts.push(`usage forcé : ${S.meta.usages[h.usage_force]}`);
+  return parts.join(", ") || "aucune";
+}
+function bindContreExports() {
+  const st = S.stress;
+  const e1 = $("#exp-scn");
+  if (e1 && st.scn) e1.onclick = () => saveCSV("frichescore_contre_analyse_scenario.csv",
+    ["site", "commune", "id", "usage_base", "usage_scenario", "rang_base", "rang_scenario", "score_base", "score_scenario", "ecart", "statut", "pourquoi", "hypotheses", "perimetre"],
+    st.scn.lignes.map((l) => [l.nom, l.commune, l.id, S.meta.usages[l.usage_base], S.meta.usages[l.usage_scenario], l.rang_base, l.rang_scenario,
+      numFR(l.score_base), numFR(l.score_scenario), numFR(l.delta), l.statut, l.pourquoi, hypText(st.scn.hypotheses), perimeterLabel()]));
+  const e2 = $("#exp-mc");
+  if (e2 && st.mc) e2.onclick = () => saveCSV("frichescore_contre_analyse_montecarlo.csv",
+    ["site", "commune", "id", "usage", "rang_base", "score_base", `probabilite_top_${st.mc.top_n}`, "score_p10", "score_p90", "confiance", "verdict", "tirages", "perimetre"],
+    st.mc.lignes.map((l) => [l.nom, l.commune, l.id, S.meta.usages[l.usage], l.rang_base, numFR(l.score_base), numFR(l.p_top, 2),
+      numFR(l.score_p10), numFR(l.score_p90), numFR(l.confiance, 2), l.robustesse, st.mc.runs, perimeterLabel()]));
 }
 function bindRows(sel) { document.querySelectorAll(`${sel} tr.click`).forEach((tr) => (tr.onclick = () => openDrawer(tr.dataset.id, tr.dataset.u || null))); }
 function statusCls(s) { return { stable: "stable", fragile: "fragile", "sort du top": "sort", "s'effondre": "effondre" }[s] || ""; }
 function scnHtml(r) {
-  return `<div class="synth">${esc(r.synthese)}</div>
+  return `<div class="row" style="justify-content:space-between;align-items:center;margin-top:12px"><h3 style="flex:1">Scénario</h3><button class="btn sm sec" id="exp-scn" style="flex:0;white-space:nowrap">Exporter ce tableau en CSV</button></div>
+  <div class="synth">${esc(r.synthese)}</div>
   <div class="card" style="padding:0"><table><thead><tr><th>Site</th><th>Usage</th><th>Rang</th><th>Score</th><th>Statut</th><th>Pourquoi</th></tr></thead><tbody>
   ${r.lignes.map((l) => `<tr class="click" data-id="${esc(l.id)}" data-u="${l.usage_scenario}"><td><div class="site-name">${esc(l.nom)}</div><div class="site-sub">${esc(l.commune)}</div></td>
     <td class="small">${esc(S.meta.usages[l.usage_base])}${l.usage_scenario !== l.usage_base ? " → " + esc(S.meta.usages[l.usage_scenario]) : ""}</td>
@@ -625,7 +659,8 @@ function scnHtml(r) {
   ${r.entrants.length ? `<div class="card"><h3>Entrent dans le top ${r.top_n} sous ce scénario</h3>${r.entrants.map((e) => `<span class="chip ok">${esc(e.nom)} (${esc(e.commune)}) : ${e.rang_base} → ${e.rang_scenario}</span>`).join(" ")}</div>` : ""}`;
 }
 function mcHtml(r) {
-  return `<div class="synth">${esc(r.synthese)}</div>
+  return `<div class="row" style="justify-content:space-between;align-items:center;margin-top:12px"><h3 style="flex:1">Simulation de Monte-Carlo (${r.runs} tirages)</h3><button class="btn sm sec" id="exp-mc" style="flex:0;white-space:nowrap">Exporter ce tableau en CSV</button></div>
+  <div class="synth">${esc(r.synthese)}</div>
   <div class="card" style="padding:0"><table><thead><tr><th>Site</th><th>Rang de base</th><th>P(rester dans le top ${r.top_n})</th><th>Score : 10ᵉ–90ᵉ centile</th><th>Confiance</th><th>Verdict</th></tr></thead><tbody>
   ${r.lignes.map((l) => `<tr class="click" data-id="${esc(l.id)}" data-u="${l.usage}"><td><div class="site-name">${esc(l.nom)}</div><div class="site-sub">${esc(l.commune)} · ${esc(S.meta.usages[l.usage])}</div></td>
     <td class="num">${l.rang_base}</td>
@@ -640,12 +675,13 @@ function mcHtml(r) {
 async function renderCouts() {
   const level = S.heatLevel || "epci";
   $("#main").innerHTML = `<div class="section-head"><div><h2>Carte de chaleur des coûts cachés</h2>
-    <p>Où se concentrent les sites « piégeux » (risque de surcoût élevé, D2 &lt; ${40}) et où se trouvent les « pépites » propres (coût faible, friction faible, données fiables) ? Agrégation par territoire, pour l'usage retenu de chaque site.</p></div>
+    <p>Où se concentrent les sites « piégeux » (risque de surcoût élevé, D2 &lt; ${S.meta.constants.piegeux_d2_max}) et où se trouvent les « pépites » propres (coût faible, friction faible, données fiables) ? Agrégation par territoire, pour l'usage retenu de chaque site.</p></div>
     <div class="seg" id="lvl">${[["departement", "Département"], ["epci", "EPCI"], ["commune", "Commune"]].map(([k, l]) => `<button data-l="${k}" class="${level === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
     <div class="card loading">Agrégation…</div>`;
   $("#lvl").onclick = (e) => { const b = e.target.closest("button"); if (b) { S.heatLevel = b.dataset.l; renderCouts(); } };
   const key = JSON.stringify(["heat", level, ctx()]);
   const r = S.cache[key] || (S.cache[key] = await api(`/api/heatmap?level=${level}`, ctx()));
+  await loadDepts();
   if (S.tab !== "couts") return;
   const heatCol = (p) => { const t = Math.min(1, p / 0.5); const stops = [[227, 239, 233], [244, 228, 184], [238, 189, 152], [215, 125, 99]]; const x = t * 3, i = Math.min(2, Math.floor(x)), f = x - i; const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * f)); return `rgb(${c.join(",")})`; };
   const card = $("#main .card"); card.outerHTML = `
@@ -659,49 +695,185 @@ async function renderCouts() {
     <div class="card"><h3>Pépites propres (coût faible, friction faible, données fiables)</h3><table><tbody>
       ${r.groupes.flatMap((g) => g.pepites).sort((a, b) => b.global - a.global).slice(0, 12).map((i) => `<tr class="click" data-id="${esc(i.id)}" data-u="${i.usage}"><td><div class="site-name">${esc(i.nom)}</div><div class="site-sub">${esc(i.commune)} · ${esc(S.meta.usages[i.usage])}</div></td><td class="num">score ${fmt(i.global)}</td><td class="cost">${fmt(i.cout_m2)} €/m²</td></tr>`).join("") || `<tr><td class="empty">Aucune</td></tr>`}</tbody></table></div>
   </div>
-  <div class="card"><h3>Repérage</h3><p class="small muted" style="margin:4px 0 8px">La carte sert à naviguer, pas à décider : chaque point est une friche, sa couleur est son risque de surcoût, sa taille sa surface. Sélectionnez un département ou un EPCI dans le périmètre pour zoomer.</p>${scatter(r.points)}</div>`;
+  <div class="card"><h3>Repérage</h3><p class="small muted" style="margin:4px 0 8px">La carte sert à naviguer, pas à décider : chaque point est une friche, sa couleur est son risque de surcoût, sa taille sa surface. Sélectionnez un département ou un EPCI dans le périmètre pour zoomer. Cliquez sur un point pour ouvrir la fiche.</p>${scatter(r.points)}</div>`;
   bindRows("#main");
   document.querySelectorAll("#main circle[data-id]").forEach((c) => (c.onclick = () => openDrawer(c.dataset.id, c.dataset.u)));
+}
+let DEPTS = null;
+async function loadDepts() {
+  if (DEPTS) return DEPTS;
+  try { DEPTS = await api("/static/departements.json"); } catch (e) { DEPTS = { departements: [] }; }
+  return DEPTS;
 }
 function scatter(points) {
   const pts = points.filter((p) => p.lat != null && p.lon != null);
   if (!pts.length) return `<div class="empty">Pas de coordonnées.</div>`;
-  const W = 900, H = 460, pad = 24;
+  const W = 900, H = 520, pad = 24;
   let minX = Math.min(...pts.map((p) => p.lon)), maxX = Math.max(...pts.map((p) => p.lon));
   let minY = Math.min(...pts.map((p) => p.lat)), maxY = Math.max(...pts.map((p) => p.lat));
-  const k = Math.cos(((minY + maxY) / 2) * Math.PI / 180);
-  const sx = (maxX - minX) * k || 0.1, sy = maxY - minY || 0.1;
+  // marge minimale pour voir les contours autour d'un périmètre resserré
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const spanY = Math.max(0.5, (maxY - minY) * 1.15), spanX = Math.max(0.7, (maxX - minX) * 1.15);
+  minX = cx - spanX / 2; maxX = cx + spanX / 2; minY = cy - spanY / 2; maxY = cy + spanY / 2;
+  const k = Math.cos((cy * Math.PI) / 180);
+  const sx = (maxX - minX) * k, sy = maxY - minY;
   const scale = Math.min((W - 2 * pad) / sx, (H - 2 * pad) / sy);
-  const X = (lon) => pad + (lon - minX) * k * scale + ((W - 2 * pad) - sx * scale) / 2;
-  const Y = (lat) => H - pad - (lat - minY) * scale - ((H - 2 * pad) - sy * scale) / 2;
-  const col = (d2) => (d2 < 40 ? "#c8553d" : d2 < 55 ? "#e39b5b" : d2 < 70 ? "#d8c06a" : "#4f9a78");
-  const groups = {};
-  const byDep = new Set(pts.map((p) => p.groupe)).size > 8;
-  pts.forEach((p) => { const g = byDep ? "Dépt " + p.departement : p.groupe; (groups[g] = groups[g] || []).push(p); });
-  const labels = Object.entries(groups).map(([g, ps]) => { const lx = ps.reduce((a, p) => a + p.lon, 0) / ps.length, ly = Math.max(...ps.map((p) => p.lat)); return `<text x="${X(lx)}" y="${Y(ly) - 12}" text-anchor="middle" font-size="11" fill="#6b7682">${esc(g.length > 34 ? g.slice(0, 32) + "…" : g)}</text>`; });
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="background:#fafbf9;border-radius:8px">
-    ${labels.join("")}
-    ${pts.sort((a, b) => b.surface_ha - a.surface_ha).map((p) => `<circle data-id="${esc(p.id)}" data-u="${p.usage}" cx="${X(p.lon).toFixed(1)}" cy="${Y(p.lat).toFixed(1)}" r="${(3 + Math.sqrt(p.surface_ha) * 1.6).toFixed(1)}" fill="${col(p.d2)}" fill-opacity=".8" stroke="#fff" stroke-width="1" style="cursor:pointer"><title>${esc(p.nom)} — ${esc(p.commune)}\nRisque de surcoût ${esc(p.risque)} (D2 ${fmt(p.d2)}), ${fmt(p.cout_m2)} €/m²</title></circle>`).join("")}
-    <rect x="${W - 268}" y="6" width="262" height="22" rx="5" fill="#fff" fill-opacity=".9"/><g transform="translate(${W - 210},17)" font-size="11" fill="#3c4855">${[["#4f9a78", "faible"], ["#d8c06a", "modéré"], ["#e39b5b", "élevé"], ["#c8553d", "piégeux"]].map(([c, l], i) => `<circle cx="${i * 64 - 50}" cy="0" r="5" fill="${c}"/><text x="${i * 64 - 42}" y="4">${l}</text>`).join("")}</g>
+  const ox = ((W - 2 * pad) - sx * scale) / 2, oy = ((H - 2 * pad) - sy * scale) / 2;
+  const X = (lon) => pad + (lon - minX) * k * scale + ox;
+  const Y = (lat) => H - pad - (lat - minY) * scale - oy;
+  const col = (d2) => (d2 < S.meta.constants.piegeux_d2_max ? "#c8553d" : d2 < 55 ? "#e39b5b" : d2 < 70 ? "#d8c06a" : "#4f9a78");
+  const deps = new Set(pts.map((p) => p.departement));
+  const base = (DEPTS?.departements || []).map((d) => {
+    const path = d.rings.map((r) => "M" + r.map(([lo, la]) => `${X(lo).toFixed(1)},${Y(la).toFixed(1)}`).join("L") + "Z").join("");
+    const on = deps.has(d.code);
+    let lbl = "";
+    if (on) {
+      const ring = d.rings.reduce((a, r) => (r.length > a.length ? r : a), []);
+      const lx = ring.reduce((a, p) => a + p[0], 0) / ring.length, ly = ring.reduce((a, p) => a + p[1], 0) / ring.length;
+      lbl = `<text x="${X(lx).toFixed(0)}" y="${Y(ly).toFixed(0)}" text-anchor="middle" font-size="12" font-weight="650" fill="#6b7682" stroke="#fff" stroke-width="3.5" paint-order="stroke" stroke-linejoin="round" pointer-events="none">${esc(d.nom)} (${esc(d.code)})</text>`;
+    }
+    return { svg: `<path d="${path}" fill="${on ? "#eef1ec" : "#f6f7f4"}" stroke="${on ? "#b9c2bb" : "#dde1dc"}" stroke-width="${on ? 1.1 : 0.7}"><title>${esc(d.nom)}</title></path>`, lbl };
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="background:#fbfcfa;border-radius:8px">
+    <defs><clipPath id="clipmap"><rect x="0" y="0" width="${W}" height="${H}"/></clipPath></defs>
+    <g clip-path="url(#clipmap)">${base.map((b) => b.svg).join("")}
+    ${pts.sort((a, b) => b.surface_ha - a.surface_ha).map((p) => `<circle data-id="${esc(p.id)}" data-u="${p.usage}" cx="${X(p.lon).toFixed(1)}" cy="${Y(p.lat).toFixed(1)}" r="${(3 + Math.sqrt(p.surface_ha) * 1.6).toFixed(1)}" fill="${col(p.d2)}" fill-opacity=".85" stroke="#fff" stroke-width="1" style="cursor:pointer"><title>${esc(p.nom)} — ${esc(p.commune)}\nRisque de surcoût ${esc(p.risque)} (D2 ${fmt(p.d2)}), ${fmt(p.cout_m2)} €/m²</title></circle>`).join("")}${base.map((b) => b.lbl).join("")}</g>
+    <rect x="${W - 268}" y="6" width="262" height="22" rx="5" fill="#fff" fill-opacity=".92"/><g transform="translate(${W - 210},17)" font-size="11" fill="#3c4855">${[["#4f9a78", "faible"], ["#d8c06a", "modéré"], ["#e39b5b", "élevé"], ["#c8553d", "piégeux"]].map(([c, l], i) => `<circle cx="${i * 64 - 50}" cy="0" r="5" fill="${c}"/><text x="${i * 64 - 42}" y="4">${l}</text>`).join("")}</g>
+    <text x="8" y="${H - 6}" font-size="9.5" fill="#9aa3ab">Fond : ${esc(DEPTS?.source || "")}</text>
   </svg>`;
 }
 
 /* -------------------------------------------------------- horloge ZAN */
 async function renderZan() {
   $("#main").innerHTML = `<div class="section-head"><div><h2>Horloge ZAN — fenêtres de financement</h2>
-    <p>Échéances réglementaires du ZAN et fenêtres de subvention, croisées avec la maturité estimée de chaque friche (étape du portfolio + délais procéduraux). Les friches dont le dossier peut être prêt avant la clôture d'un dispositif auquel elles sont éligibles sont signalées.</p></div></div><div class="card loading">Calcul…</div>`;
+    <p>Échéances réglementaires du ZAN et fenêtres de subvention, croisées avec la maturité estimée de chaque friche (étape du portfolio + délais procéduraux). Les friches dont le dossier peut être prêt avant la clôture d'un dispositif auquel elles sont éligibles sont signalées.</p></div>
+    <button class="btn" id="cal-edit">${S.calEdit ? "Fermer l'éditeur" : "Modifier le calendrier"}</button></div>
+    <div id="cal-editor"></div><div id="zan-body" class="card loading">Calcul…</div>`;
+  $("#cal-edit").onclick = () => { S.calEdit = !S.calEdit; renderZan(); };
+  if (S.calEdit) renderCalendarEditor();
   const key = JSON.stringify(["zan", ctx()]);
   const r = S.cache[key] || (S.cache[key] = await api("/api/zan", ctx()));
   if (S.tab !== "zan") return;
-  $("#main .card").outerHTML = `
-  <div class="alert">${esc(r.avertissement)} Fichier éditable : <code>app/data/funding_windows.json</code>.</div>
-  <div class="card tl-wrap">${timeline(r)}</div>
+  const F = S.zanF || (S.zanF = { types: Object.keys(r.types || {}), verifiedOnly: false });
+  const typeOk = (t) => F.types.includes(t || "subvention_etat");
+  const wins = r.fenetres.filter((w) => typeOk(w.type) && (!F.verifiedOnly || w.statut_verification === "verifie"));
+  const winIds = new Set(wins.map((w) => w.id));
+  const corr = r.correspondances.filter((m) => winIds.has(m.fenetre));
+  const nUnverified = r.fenetres.filter((w) => w.statut_verification !== "verifie").length;
+  $("#zan-body").outerHTML = `
+  ${nUnverified ? `<div class="alert"><b>${nUnverified} fenêtre(s) de financement sur ${r.fenetres.length} ne sont pas vérifiées</b> (dates d'exemple). Utilisez « Modifier le calendrier » pour saisir les dates officielles et les marquer comme vérifiées. Le fichier est stocké avec vos données : <code>funding_windows.json</code>.</div>` : `<div class="alert info">Toutes les fenêtres de financement du calendrier sont marquées comme vérifiées.</div>`}
+  <div class="card"><div class="row" style="flex-wrap:wrap;justify-content:flex-start;gap:6px;align-items:center">
+    <span class="small muted" style="flex:0;white-space:nowrap">Types de financement :</span>
+    <div class="seg" id="zan-types" style="flex:0 1 auto">${Object.entries(r.types || {}).map(([k, l]) => `<button data-t="${k}" class="${F.types.includes(k) ? "on" : ""}">${esc(l)} <span class="muted">${r.fenetres.filter((w) => (w.type || "subvention_etat") === k).length}</span></button>`).join("")}</div>
+    <label class="toggle" style="flex:0 1 auto;margin-left:12px"><input type="checkbox" id="zan-verif" ${F.verifiedOnly ? "checked" : ""}> Fenêtres vérifiées uniquement</label>
+  </div>
+  <div class="tl-wrap" style="margin-top:10px">${timeline({ ...r, fenetres: wins })}</div></div>
   <div class="card" style="padding:0"><table><thead><tr><th>Friche</th><th>Usage</th><th>Score</th><th>Dossier prêt vers</th><th>Fenêtres de financement compatibles</th></tr></thead><tbody>
-  ${zanGroups(r.correspondances).slice(0, 30).map((g) => `<tr class="click zan-row" data-id="${esc(g.id)}" data-u="${g.usage}"><td><div class="site-name">${esc(g.nom)}</div><div class="site-sub">${esc(g.commune)}${g.stage ? " · " + esc(S.meta.stages[g.stage]) : " · hors portfolio"}</div></td>
+  ${zanGroups(corr).slice(0, 30).map((g) => `<tr class="click zan-row" data-id="${esc(g.id)}" data-u="${g.usage}"><td><div class="site-name">${esc(g.nom)}</div><div class="site-sub">${esc(g.commune)}${g.stage ? " · " + esc(S.meta.stages[g.stage]) : " · hors portfolio"}</div></td>
     <td>${esc(S.meta.usages[g.usage])}</td><td class="num">${fmt(g.score)}</td><td class="num">${esc(g.maturite.date)}<div class="site-sub">~${fmt(g.maturite.mois, 1)} mois</div></td>
-    <td>${g.items.map((m) => `<div style="margin-bottom:3px"><span class="status ${m.statut === "coïncide" ? "stable" : "fragile"}">${m.statut === "coïncide" ? "coïncide" : "trop juste"}</span> ${esc(m.fenetre_nom)} <span class="muted small">— clôture ${esc(m.cloture)}, marge <b class="${m.marge_jours >= 0 ? "delta-pos" : "delta-neg"}">${m.marge_jours >= 0 ? "+" : ""}${m.marge_jours} j</b></span></div>`).join("")}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">Aucune friche du périmètre ne coïncide avec une fenêtre ouverte. Faites avancer des sites dans le portfolio pour réduire leur délai de maturité.</td></tr>`}
+    <td>${g.items.map((m) => `<div style="margin-bottom:3px"><span class="status ${m.statut === "coïncide" ? "stable" : "fragile"}">${m.statut === "coïncide" ? "coïncide" : "trop juste"}</span> ${esc(m.fenetre_nom)}${m.fenetre_statut !== "verifie" ? ` <span class="chip warn">à vérifier</span>` : ` <span class="chip ok">vérifiée</span>`} <span class="muted small">— clôture ${esc(m.cloture)}, marge <b class="${m.marge_jours >= 0 ? "delta-pos" : "delta-neg"}">${m.marge_jours >= 0 ? "+" : ""}${m.marge_jours} j</b></span></div>`).join("")}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">Aucune friche du périmètre ne coïncide avec une fenêtre ${F.verifiedOnly ? "vérifiée " : ""}des types sélectionnés. Faites avancer des sites dans le portfolio pour réduire leur délai de maturité.</td></tr>`}
   </tbody></table></div>`;
+  $("#zan-types").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const t = b.dataset.t;
+    F.types = F.types.includes(t) ? F.types.filter((x) => x !== t) : [...F.types, t];
+    renderZan();
+  };
+  $("#zan-verif").onchange = (e) => { F.verifiedOnly = e.target.checked; renderZan(); };
   bindRows("#main");
+}
+
+/* ------------------------------------------------- éditeur du calendrier */
+async function renderCalendarEditor(editId) {
+  const box = $("#cal-editor"); if (!box) return;
+  if (!S.cal || editId === "__reload") S.cal = await api("/api/calendrier");
+  const C = S.cal.calendrier;
+  const types = C.types || {};
+  const edit = S.calForm;
+  box.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h3 style="flex:1">Calendrier des financements</h3>
+    <div style="flex:0;white-space:nowrap"><button class="btn sm" id="cal-add">+ Ajouter un dispositif</button> <button class="btn sm sec" id="cal-reset">Restaurer le calendrier d'exemple</button></div></div>
+    <p class="small muted" style="margin:6px 0 10px">Fichier : <code>${esc(S.cal.fichier)}</code>. Une fenêtre « vérifiée » doit avoir une date de vérification et, idéalement, l'adresse de la page officielle.</p>
+    <div id="cal-errors"></div>
+    ${edit ? calFormHtml(edit, types) : ""}
+    <table><thead><tr><th style="position:static">Dispositif</th><th style="position:static">Type</th><th style="position:static">Ouverture</th><th style="position:static">Clôture</th><th style="position:static">Usages</th><th style="position:static">Statut</th><th style="position:static"></th></tr></thead><tbody>
+    ${C.fenetres.map((w, i) => `<tr><td><b>${esc(w.nom)}</b><div class="site-sub">${esc(w.financeur || "")}${w.source_url ? ` · <a href="${esc(w.source_url)}" target="_blank" rel="noopener">source</a>` : ""}</div></td>
+      <td class="small">${esc(types[w.type] || w.type)}</td><td class="num small">${esc(w.ouverture)}</td><td class="num small">${esc(w.cloture)}</td>
+      <td class="small">${(w.usages || []).map((u) => esc(S.meta.usages[u] || u)).join(", ")}</td>
+      <td>${w.statut_verification === "verifie" ? `<span class="chip ok">vérifiée${w.date_verification ? " le " + esc(w.date_verification) : ""}</span>` : `<span class="chip warn">à vérifier</span>`}</td>
+      <td style="white-space:nowrap"><button class="btn sm sec" data-cal-edit="${i}">Modifier</button> <button class="btn sm sec" data-cal-del="${i}">Supprimer</button></td></tr>`).join("")}
+    </tbody></table>
+    <h4 style="margin-top:14px">Échéances réglementaires</h4>
+    <table><tbody>${(C.echeances_reglementaires || []).map((e) => `<tr><td class="num small" style="width:100px">${esc(e.date)}</td><td class="small"><b>${esc(e.nom)}</b><div class="muted">${esc(e.source || "")}</div></td></tr>`).join("")}</tbody></table>
+    <details style="margin-top:10px"><summary>Éditeur JSON avancé (échéances, types, tous les champs)</summary>
+      <textarea id="cal-json" style="min-height:320px;font-family:var(--mono);font-size:12px">${esc(JSON.stringify(C, null, 2))}</textarea>
+      <button class="btn sm" id="cal-json-save" style="margin-top:6px">Valider et enregistrer le JSON</button></details>
+  </div>`;
+  const reload = async () => { S.cache = {}; S.calForm = null; renderZan(); };
+  const save = async (data) => {
+    try { S.cal = await api("/api/calendrier", data, "PUT"); toast("Calendrier enregistré."); await reload(); }
+    catch (e) {
+      let errs = [e.message];
+      try { const d = JSON.parse(e.message); if (d.erreurs) errs = d.erreurs; } catch (x) { /* message brut */ }
+      $("#cal-errors").innerHTML = `<div class="alert bad"><b>Le calendrier n'a pas été enregistré :</b><ul style="margin:4px 0 0 16px;padding:0">${errs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
+      $("#cal-errors").scrollIntoView({ block: "nearest" });
+    }
+  };
+  $("#cal-add").onclick = () => { S.calForm = { index: -1, w: { id: "", nom: "", financeur: "", type: Object.keys(types)[0], dispositif: "autre", ouverture: "", cloture: "", usages: [], conditions: {}, statut_verification: "a_verifier" } }; renderCalendarEditor(); };
+  $("#cal-reset").onclick = async () => { if (!confirm("Remplacer le calendrier par le calendrier d'exemple livré avec FricheScore ? Vos modifications seront perdues.")) return; S.cal = await api("/api/calendrier/reset", {}); await reload(); };
+  box.querySelectorAll("[data-cal-edit]").forEach((b) => (b.onclick = () => { const i = +b.dataset.calEdit; S.calForm = { index: i, w: JSON.parse(JSON.stringify(C.fenetres[i])) }; renderCalendarEditor(); box.scrollIntoView({ block: "start" }); }));
+  box.querySelectorAll("[data-cal-del]").forEach((b) => (b.onclick = () => {
+    const i = +b.dataset.calDel;
+    if (!confirm(`Supprimer « ${C.fenetres[i].nom} » ?`)) return;
+    const data = JSON.parse(JSON.stringify(C)); data.fenetres.splice(i, 1); save(data);
+  }));
+  $("#cal-json-save").onclick = () => {
+    let data;
+    try { data = JSON.parse($("#cal-json").value); } catch (e) { $("#cal-errors").innerHTML = `<div class="alert bad">JSON invalide : ${esc(e.message)}</div>`; return; }
+    save(data);
+  };
+  const fs = $("#cal-form-save");
+  if (fs) {
+    $("#cal-form-cancel").onclick = () => { S.calForm = null; renderCalendarEditor(); };
+    fs.onclick = () => {
+      const g = (id) => $("#" + id).value.trim();
+      const w = { ...S.calForm.w };
+      w.nom = g("cf-nom"); w.financeur = g("cf-fin"); w.type = g("cf-type"); w.dispositif = g("cf-disp");
+      w.ouverture = g("cf-ouv"); w.cloture = g("cf-clo"); w.maturite_requise = g("cf-mat") || null;
+      w.statut_verification = g("cf-statut"); w.date_verification = g("cf-dv") || null; w.source_url = g("cf-url") || null;
+      w.usages = [...document.querySelectorAll("#cal-form input[data-us]:checked")].map((i) => i.dataset.us);
+      const cond = {};
+      if ($("#cf-bilan").checked) cond.bilan_deficitaire = true;
+      if ($("#cf-pollue").checked) cond.pollue = true;
+      if (g("cf-surf")) cond.surface_min_ha = parseFloat(g("cf-surf").replace(",", "."));
+      w.conditions = cond;
+      if (w.statut_verification === "verifie" && !w.date_verification) w.date_verification = new Date().toISOString().slice(0, 10);
+      if (!w.id) w.id = (w.nom || "dispositif").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) + "_" + Date.now().toString(36).slice(-4);
+      const data = JSON.parse(JSON.stringify(C));
+      if (S.calForm.index >= 0) data.fenetres[S.calForm.index] = w; else data.fenetres.push(w);
+      save(data);
+    };
+  }
+}
+function calFormHtml(f, types) {
+  const w = f.w, c = w.conditions || {};
+  const disp = (S.cal.dispositifs || []);
+  return `<div class="card" id="cal-form" style="background:#fafbf9;margin-bottom:12px"><h3>${f.index >= 0 ? "Modifier" : "Ajouter"} un dispositif</h3>
+    <div class="grid3" style="margin-top:8px">
+      <div style="grid-column:1 / 3"><label class="small muted">Nom</label><input type="text" id="cf-nom" value="${esc(w.nom)}"></div>
+      <div><label class="small muted">Financeur</label><input type="text" id="cf-fin" value="${esc(w.financeur || "")}"></div>
+      <div><label class="small muted">Type de financement</label><select id="cf-type">${Object.entries(types).map(([k, l]) => `<option value="${k}" ${w.type === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
+      <div><label class="small muted">Dispositif (pour l'éligibilité)</label><select id="cf-disp">${disp.map((d) => `<option ${w.dispositif === d ? "selected" : ""}>${esc(d)}</option>`).join("")}</select></div>
+      <div><label class="small muted">Maturité requise du dossier</label><input type="text" id="cf-mat" value="${esc(w.maturite_requise || "")}"></div>
+      <div><label class="small muted">Ouverture</label><input type="date" id="cf-ouv" value="${esc(w.ouverture)}"></div>
+      <div><label class="small muted">Clôture</label><input type="date" id="cf-clo" value="${esc(w.cloture)}"></div>
+      <div><label class="small muted">Surface minimale (ha)</label><input type="number" id="cf-surf" value="${c.surface_min_ha ?? ""}"></div>
+      <div style="grid-column:1 / 3"><label class="small muted">Usages éligibles</label><div class="seg">${Object.entries(S.meta.usages).map(([k, l]) => `<label class="toggle" style="margin-right:10px"><input type="checkbox" data-us="${k}" ${(w.usages || []).includes(k) ? "checked" : ""}>${esc(l)}</label>`).join("")}</div></div>
+      <div><label class="small muted">Conditions</label><label class="toggle"><input type="checkbox" id="cf-bilan" ${c.bilan_deficitaire ? "checked" : ""}> bilan d'opération déficitaire</label><label class="toggle"><input type="checkbox" id="cf-pollue" ${c.pollue ? "checked" : ""}> site pollué</label></div>
+      <div><label class="small muted">Statut</label><select id="cf-statut"><option value="a_verifier" ${w.statut_verification !== "verifie" ? "selected" : ""}>à vérifier</option><option value="verifie" ${w.statut_verification === "verifie" ? "selected" : ""}>vérifié</option></select></div>
+      <div><label class="small muted">Date de vérification</label><input type="date" id="cf-dv" value="${esc(w.date_verification || "")}"></div>
+      <div><label class="small muted">Page officielle (URL)</label><input type="text" id="cf-url" value="${esc(w.source_url || "")}" placeholder="https://…"></div>
+    </div>
+    <div style="margin-top:10px"><button class="btn" id="cal-form-save">Enregistrer</button> <button class="btn sec" id="cal-form-cancel">Annuler</button></div></div>`;
 }
 function zanGroups(list) {
   const m = new Map();
@@ -722,7 +894,8 @@ function timeline(r) {
     ${years.map((y) => `<line x1="${X(y + "-01-01")}" x2="${X(y + "-01-01")}" y1="20" y2="${H - 10}" stroke="#eef0ec"/><text x="${X(y + "-01-01") + 3}" y="16" font-size="11" fill="#6b7682">${y}</text>`).join("")}
     <line x1="${L}" x2="${L}" y1="20" y2="${H - 10}" stroke="#1c2733" stroke-width="2"/><text x="${L - 4}" y="16" font-size="11" text-anchor="end" fill="#1c2733" font-weight="700">aujourd'hui</text>
     ${r.jalons.filter((j) => !j.passee).map((j) => `<g><line x1="${X(j.date)}" x2="${X(j.date)}" y1="24" y2="${H - 10}" stroke="#b5541c" stroke-dasharray="4 3"/><path d="M${X(j.date)} ${top - 8} l6 6 l-6 6 l-6 -6z" fill="#b5541c"><title>${esc(j.nom)} — ${esc(j.date)}\n${esc(j.effet || "")}\n${esc(j.source)}</title></path></g>`).join("")}
-    ${wins.map((w, i) => { const y = top + 10 + i * rowH; const x0 = Math.max(L, X(w.ouverture)), x1 = X(w.cloture); return `<text x="${L - 8}" y="${y + 12}" font-size="10.5" text-anchor="end" fill="#3c4855">${esc(w.nom.length > 38 ? w.nom.slice(0, 36) + "…" : w.nom)}</text><rect x="${x0}" y="${y + 2}" width="${Math.max(3, x1 - x0)}" height="13" rx="3" fill="#1f6f5c" fill-opacity=".75"><title>${esc(w.nom)}\n${esc(w.ouverture)} → ${esc(w.cloture)}\nConfiance : ${esc(w.confiance)}</title></rect>`; }).join("")}
+    ${wins.map((w, i) => { const y = top + 10 + i * rowH; const x0 = Math.max(L, X(w.ouverture)), x1 = X(w.cloture); return `<text x="${L - 8}" y="${y + 12}" font-size="10.5" text-anchor="end" fill="#3c4855">${esc(w.nom.length > 38 ? w.nom.slice(0, 36) + "…" : w.nom)}</text><rect x="${x0}" y="${y + 2}" width="${Math.max(3, x1 - x0)}" height="13" rx="3" fill="${w.statut_verification === "verifie" ? "#1f6f5c" : "#fff"}" fill-opacity="${w.statut_verification === "verifie" ? ".8" : "1"}" stroke="${w.statut_verification === "verifie" ? "none" : "#c4901c"}" stroke-dasharray="3 2"><title>${esc(w.nom)}\n${esc(w.ouverture)} → ${esc(w.cloture)}\n${w.statut_verification === "verifie" ? "Vérifiée" : "À vérifier (date d'exemple)"}</title></rect>`; }).join("")}
+    <g transform="translate(${W - 300},${H - 12})" font-size="10.5" fill="#3c4855"><rect width="16" height="9" rx="2" fill="#1f6f5c" fill-opacity=".8"/><text x="20" y="8">vérifiée</text><rect x="80" width="16" height="9" rx="2" fill="#fff" stroke="#c4901c" stroke-dasharray="3 2"/><text x="100" y="8">à vérifier</text></g>
     <text x="${L}" y="${H - 2}" font-size="10.5" fill="#b5541c">◆ échéances ZAN : ${r.jalons.filter((j) => !j.passee).map((j) => `${esc(j.nom.split("(")[0].replace("Intégration des objectifs ZAN dans les ", "").replace("Fin de la première décennie ZAN ", "fin 1re décennie"))} ${esc(j.date)}`).join(" · ")}</text>
   </svg>`;
 }
@@ -824,7 +997,7 @@ async function renderPortfolio() {
 }
 
 /* ------------------------------------------------------- données */
-function renderDonnees() {
+async function renderDonnees() {
   const m = S.meta;
   $("#main").innerHTML = `<div class="section-head"><div><h2>Données & méthode</h2><p>Sources chargées, import de vos propres données et règles de calcul du FricheScore.</p></div></div>
   <div class="grid2">
@@ -832,13 +1005,28 @@ function renderDonnees() {
       <button class="btn sec sm" id="reset-demo" style="margin-top:10px">Réinitialiser le jeu de démonstration</button>
       <p class="hint">La réinitialisation efface aussi le portfolio et les données terrain.</p></div>
     <div class="card"><h3>Importer un fichier CSV</h3>
-      <p class="small muted">Format FricheScore (une colonne par indicateur — <a href="/api/import/modele.csv">télécharger le modèle</a>) ou export Cartofriches (colonnes reconnues : site_id, site_nom, comm_insee, site_surface, site_type, bati_surface…). Pour tracer la provenance colonne par colonne, ajoutez <code>&lt;colonne&gt;__source</code>, <code>__date</code>, <code>__confiance</code>.</p>
-      <input type="file" id="imp-file" accept=".csv,text/csv"><div class="row" style="margin-top:6px"><input type="text" id="imp-src" placeholder="Libellé de la source (ex. Observatoire EPF 2026)"><input type="date" id="imp-date"></div>
-      <button class="btn" id="imp-go" style="margin-top:8px">Importer</button><div id="imp-out" class="small" style="margin-top:6px"></div></div>
+      <p class="small muted">Séparateur (point-virgule, virgule, tabulation) et encodage (UTF-8 ou Windows/Excel) détectés automatiquement. Les colonnes peuvent porter la clé (<code>surface_m2</code>), le libellé (« Surface du site (m²) ») ou un nom Cartofriches (<code>site_surface</code>). Les cellules invalides sont signalées et ignorées, sans bloquer le reste.</p>
+      <div class="row" style="margin:6px 0"><a class="btn sm sec" href="/api/import/modele.csv" style="flex:0;white-space:nowrap;text-decoration:none">Télécharger le modèle CSV</a><a class="btn sm sec" href="/api/import/dictionnaire.csv" style="flex:0;white-space:nowrap;text-decoration:none">Dictionnaire des colonnes</a></div>
+      <input type="file" id="imp-file" accept=".csv,.txt,text/csv"><div class="row" style="margin-top:6px"><input type="text" id="imp-src" placeholder="Libellé de la source (ex. Observatoire EPF 2026)"><input type="date" id="imp-date" title="Date des données (par défaut : aujourd'hui)"></div>
+      <div class="row" style="margin-top:8px;justify-content:flex-start"><button class="btn sec" id="imp-check" style="flex:0;white-space:nowrap">Vérifier sans importer</button><button class="btn" id="imp-go" style="flex:0">Importer</button></div></div>
   </div>
-  <div class="card"><h3>Connecteur Cartofriches + Géorisques</h3>
-    <p class="small muted">Interroge l'API Données foncières du Cerema (Cartofriches) puis Géorisques (CASIAS/ex-BASIAS, instructions SSP/ex-BASOL, SIS, ICPE) pour chaque friche. Nécessite un accès Internet depuis la machine qui exécute FricheScore ; en cas d'échec, l'erreur est affichée telle quelle et aucune donnée n'est inventée.</p>
-    <div class="row"><input type="text" id="cf-codes" placeholder="Codes INSEE séparés par des virgules (ex. 59512, 59599)"><button class="btn" id="cf-go" style="flex:0;white-space:nowrap">Interroger</button></div><div id="cf-out" class="small" style="margin-top:6px"></div></div>
+  <div id="imp-out"></div>
+  <div class="card"><h3>Connecteurs Cartofriches · Géorisques · DVF</h3>
+    <p class="small muted">Les connecteurs interrogent les API publiques depuis la machine qui exécute FricheScore. Commencez par <b>tester la connexion</b> : l'appel est réel et le résultat brut (ou l'erreur exacte) s'affiche. En cas d'échec, l'outil n'invente aucune donnée.</p>
+    <div class="grid3" style="align-items:end">
+      <div><label class="small muted">Source</label><select id="ct-src"><option value="cartofriches">Cartofriches (Cerema)</option><option value="georisques">Géorisques (BASIAS, BASOL, SIS, ICPE)</option><option value="dvf">DVF géolocalisé</option></select></div>
+      <div><label class="small muted">Code INSEE de test</label><input type="text" id="ct-insee" value="59350"></div>
+      <div class="row"><div><label class="small muted">Latitude</label><input type="number" id="ct-lat" value="50.6329" step="any"></div><div><label class="small muted">Longitude</label><input type="number" id="ct-lon" value="3.0586" step="any"></div></div>
+      <div style="grid-column:1 / 3"><label class="small muted">Adresse de l'API (modifiable si elle a changé)</label><input type="text" id="ct-url"></div>
+      <div><button class="btn" id="ct-go" style="width:100%">Tester la connexion</button></div>
+    </div>
+    <div id="ct-out" style="margin-top:10px"></div>
+    <h4 style="margin-top:16px">Importer un périmètre</h4>
+    <div class="row" style="margin-top:6px"><input type="text" id="cf-codes" placeholder="Codes INSEE séparés par des virgules (ex. 59512, 59599)">
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-geo" checked> Géorisques</label>
+      <label class="toggle" style="flex:0;white-space:nowrap"><input type="checkbox" id="cf-dvf" checked> DVF</label>
+      <button class="btn" id="cf-go" style="flex:0;white-space:nowrap">Importer</button></div>
+    <div id="cf-out" class="small" style="margin-top:6px"></div></div>
   <div class="card doc"><h3>Méthode</h3>
     <p>Chaque friche reçoit une note de 0 à 100 sur cinq dimensions, calculées <b>séparément pour chaque usage</b> (${Object.values(m.usages).join(", ").toLowerCase()}).</p>
     <ul>
@@ -856,17 +1044,125 @@ function renderDonnees() {
     ${Object.entries(m.catalog).map(([k, c]) => `<tr><td><code>${k}</code></td><td>${esc(c.label)}</td><td>${esc(c.source)}</td><td>${esc(c.confiance)}</td><td class="small">${esc((c.valeurs || []).join(", "))}</td></tr>`).join("")}</tbody></table></details></div>`;
   $("#reset-demo").onclick = async () => { if (!confirm("Réinitialiser le jeu de démonstration ? Le portfolio et les données terrain seront effacés.")) return; await api("/api/demo/reset", {}); S.meta = await api("/api/meta"); await loadSites(); renderSide(); render(); toast("Jeu de démonstration rechargé."); };
   document.querySelectorAll("[data-delorig]").forEach((b) => (b.onclick = async () => { if (!confirm(`Retirer toutes les friches « ${b.dataset.delorig} » ?`)) return; await api(`/api/donnees/${encodeURIComponent(b.dataset.delorig)}`, undefined, "DELETE"); S.meta = await api("/api/meta"); await loadSites(); renderSide(); render(); }));
-  $("#imp-go").onclick = async () => {
+  const doImport = async (dry) => {
     const f = $("#imp-file").files[0]; if (!f) { toast("Choisissez un fichier."); return; }
-    const fd = new FormData(); fd.append("file", f); fd.append("source", $("#imp-src").value || f.name); if ($("#imp-date").value) fd.append("date", $("#imp-date").value);
-    try { const r = await api("/api/import/csv", fd); $("#imp-out").innerHTML = `${r.importees} friche(s) importée(s).${r.colonnes_ignorees.length ? " Colonnes ignorées : " + esc(r.colonnes_ignorees.join(", ")) : ""}${r.avertissements.length ? "<br>" + r.avertissements.map(esc).join("<br>") : ""}`; S.meta = await api("/api/meta"); await loadSites(); renderSide(); }
-    catch (e) { $("#imp-out").textContent = "Erreur : " + e.message; }
+    const fd = new FormData(); fd.append("file", f); fd.append("source", $("#imp-src").value || f.name);
+    if ($("#imp-date").value) fd.append("date", $("#imp-date").value);
+    fd.append("dry_run", dry ? "true" : "false");
+    $("#imp-out").innerHTML = `<div class="card loading">${dry ? "Vérification" : "Import"} en cours…</div>`;
+    try {
+      const r = await api("/api/import/csv", fd);
+      $("#imp-out").innerHTML = importReport(r, f.name);
+      const ex = $("#imp-exp"); if (ex) ex.onclick = () => saveCSV("rapport_import.csv", ["ligne", "colonne", "valeur", "niveau", "probleme"], r.problemes.map((p) => [p.ligne, p.colonne, p.valeur, p.niveau, p.message]));
+      const go = $("#imp-go2"); if (go) go.onclick = () => doImport(false);
+      if (!dry) { S.meta = await api("/api/meta"); await loadSites(); renderSide(); }
+    } catch (e) { $("#imp-out").innerHTML = `<div class="card alert bad">Erreur : ${esc(e.message)}</div>`; }
+  };
+  $("#imp-check").onclick = () => doImport(true);
+  $("#imp-go").onclick = () => doImport(false);
+  const urls = await api("/api/connecteurs").catch(() => ({}));
+  const setUrl = () => { $("#ct-url").value = urls[$("#ct-src").value] || ""; };
+  $("#ct-src").onchange = setUrl; setUrl();
+  $("#ct-go").onclick = async () => {
+    $("#ct-out").innerHTML = `<div class="loading">Appel en cours (jusqu'à ${urls.timeout_s || 20} s)…</div>`;
+    try {
+      const r = await api("/api/connecteurs/test", { source: $("#ct-src").value, code_insee: $("#ct-insee").value, lat: +$("#ct-lat").value, lon: +$("#ct-lon").value, base_url: $("#ct-url").value || null });
+      $("#ct-out").innerHTML = `<div class="alert ${r.ok ? "info" : "bad"}"><b>${r.ok ? "✓ Connexion réussie" : "✗ Échec"}</b> — ${esc(r.source)} · ${r.http_status ? "HTTP " + r.http_status + " · " : ""}${r.duree_ms} ms${r.erreur ? `<br>${esc(r.erreur)}` : ""}${r.url ? `<br><span class="small">URL appelée : <code>${esc(r.url)}</code></span>` : ""}</div>
+        ${r.resultat ? `<h4>Résultat interprété</h4><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px">${esc(JSON.stringify(r.resultat, null, 2))}</pre>` : ""}
+        ${r.apercu_brut ? `<details><summary>Réponse brute (extrait)</summary><pre style="background:#f6f7f4;padding:8px;border-radius:6px;overflow:auto;max-height:260px;font-size:11.5px;white-space:pre-wrap">${esc(r.apercu_brut)}</pre></details>` : ""}`;
+    } catch (e) { $("#ct-out").innerHTML = `<div class="alert bad">Erreur : ${esc(e.message)}</div>`; }
   };
   $("#cf-go").onclick = async () => {
     const codes = $("#cf-codes").value.split(/[\s,;]+/).filter(Boolean); if (!codes.length) return;
     $("#cf-out").textContent = "Interrogation en cours…";
-    try { const r = await api("/api/ingest/cartofriches", { codes_insee: codes }); $("#cf-out").innerHTML = `${r.importees} friche(s) importée(s).${r.erreurs.length ? "<br>" + r.erreurs.map(esc).join("<br>") : ""}`; S.meta = await api("/api/meta"); await loadSites(); renderSide(); }
-    catch (e) { $("#cf-out").textContent = "Erreur : " + e.message; }
+    try {
+      const r = await api("/api/ingest/cartofriches", { codes_insee: codes, georisques: $("#cf-geo").checked, dvf: $("#cf-dvf").checked });
+      $("#cf-out").innerHTML = `<b>${r.importees} friche(s) importée(s)</b>, ${r.communes_dvf} commune(s) enrichie(s) avec DVF.${r.erreurs.length ? `<div class="alert bad" style="margin-top:6px">${r.erreurs.slice(0, 30).map(esc).join("<br>")}${r.erreurs.length > 30 ? `<br>… et ${r.erreurs.length - 30} autre(s)` : ""}</div>` : ""}${r.avertissements.length ? `<div class="alert">${r.avertissements.slice(0, 10).map(esc).join("<br>")}</div>` : ""}`;
+      S.meta = await api("/api/meta"); await loadSites(); renderSide();
+    } catch (e) { $("#cf-out").textContent = "Erreur : " + e.message; }
+  };
+}
+function importReport(r, fname) {
+  const dry = r.mode === "vérification";
+  const n = dry ? r.importables : r.importees;
+  const errs = r.problemes.filter((p) => p.niveau === "erreur").length;
+  const warns = r.problemes.length - errs;
+  return `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h3 style="flex:1">${dry ? "Vérification" : "Import"} de « ${esc(fname)} »</h3>
+    ${r.problemes.length ? `<button class="btn sm sec" id="imp-exp" style="flex:0;white-space:nowrap">Exporter le rapport</button>` : ""}
+    ${dry && n ? `<button class="btn sm" id="imp-go2" style="flex:0;white-space:nowrap;margin-left:6px">Importer maintenant</button>` : ""}</div>
+    <div class="kpis" style="margin:10px 0">
+      <div class="kpi"><b>${r.lignes_lues}</b><span>lignes lues</span></div>
+      <div class="kpi"><b>${n}</b><span>${dry ? "importables" : "importées"}</span></div>
+      <div class="kpi"><b>${r.rejetees}</b><span>rejetées</span></div>
+      <div class="kpi"><b>${r.evaluables}</b><span>évaluables</span></div>
+      <div class="kpi"><b>${errs}</b><span>erreurs</span></div>
+      <div class="kpi"><b>${warns}</b><span>avertissements</span></div>
+    </div>
+    <p class="small muted">Séparateur : ${esc(r.separateur || "?")} · encodage : ${esc(r.encodage)} · ${Object.keys(r.colonnes_reconnues).length} colonne(s) reconnue(s)${r.colonnes_ignorees.length ? ` · ignorées : ${r.colonnes_ignorees.map((c) => `<code>${esc(c)}</code>`).join(", ")}` : ""}</p>
+    ${r.erreurs_fichier.map((e) => `<div class="alert bad">${esc(e)}</div>`).join("")}
+    ${r.problemes.length ? `<table class="fv" style="margin-top:8px"><thead><tr><th>Ligne</th><th>Colonne</th><th>Valeur</th><th>Niveau</th><th>Problème</th></tr></thead><tbody>
+      ${r.problemes.slice(0, 200).map((p) => `<tr><td class="num">${p.ligne}</td><td><code>${esc(p.colonne)}</code></td><td>${esc(p.valeur)}</td><td><span class="chip ${p.niveau === "erreur" ? "bad" : "warn"}">${esc(p.niveau)}</span></td><td>${esc(p.message)}</td></tr>`).join("")}</tbody></table>
+      ${r.problemes.length > 200 || r.problemes_tronques ? `<p class="small muted">${r.problemes.length - 200 + r.problemes_tronques > 0 ? (r.problemes.length - Math.min(200, r.problemes.length) + r.problemes_tronques) + " problème(s) supplémentaire(s) dans le rapport exporté." : ""}</p>` : ""}` : `<div class="alert info">Aucun problème détecté.</div>`}
+  </div>`;
+}
+
+/* ----------------------------------------------------------- paramètres */
+async function renderParametres() {
+  $("#main").innerHTML = `<div class="loading">Chargement des paramètres…</div>`;
+  const r = await api("/api/parametres");
+  if (S.tab !== "parametres") return;
+  S.params = r;
+  const groups = [];
+  r.parametres.forEach((p) => { let g = groups.find((x) => x.nom === p.groupe); if (!g) groups.push((g = { nom: p.groupe, items: [] })); g.items.push(p); });
+  const open = S.paramOpen || (S.paramOpen = new Set([groups[0]?.nom]));
+  const fv = (v) => (Array.isArray(v) ? v : [v]);
+  const showV = (v) => fv(v).map((x) => fmt(x, Math.abs(x) < 10 && !Number.isInteger(x) ? 2 : 0)).join(" – ");
+  $("#main").innerHTML = `<div class="section-head"><div><h2>Paramètres de calcul</h2>
+    <p>Calibrez les coûts unitaires, les signaux de pollution, les pénalités de friction, la confiance et les profils sur vos propres opérations. Chaque modification s'applique immédiatement à tous les scores ; une justification (source, retour d'expérience) peut être notée, et la liste des paramètres modifiés figure en annexe du rapport de pré-cadrage.</p></div>
+    <div class="row" style="flex:0;white-space:nowrap;gap:6px"><a class="btn sec" href="/api/parametres/export" style="text-decoration:none">Exporter (JSON)</a>
+      <label class="btn sec" style="cursor:pointer">Importer (JSON)<input type="file" id="pa-imp" accept=".json,application/json" hidden></label>
+      <button class="btn warn" id="pa-reset" ${r.n_modifies ? "" : "disabled"}>Tout réinitialiser</button></div></div>
+  <div class="alert ${r.n_modifies ? "info" : ""}">${r.n_modifies ? `<b>${r.n_modifies} paramètre(s) calibré(s)</b> par rapport aux valeurs par défaut.` : "Tous les paramètres sont à leur valeur par défaut : ce sont des ordres de grandeur génériques, à calibrer avant de présenter des chiffres en comité."}</div>
+  <div id="pa-err"></div>
+  ${groups.map((g) => { const nmod = g.items.filter((i) => i.modifie).length; return `<div class="card"><details ${open.has(g.nom) ? "open" : ""} data-g="${esc(g.nom)}"><summary>${esc(g.nom)} <span class="muted small">(${g.items.length} paramètres${nmod ? `, <b>${nmod} modifié(s)</b>` : ""})</span></summary>
+    ${g.items[0].aide ? `<p class="small muted" style="margin:4px 0 8px">${esc(g.items[0].aide)}</p>` : ""}
+    <table class="fv"><thead><tr><th>Paramètre</th>${(g.items[0].composantes || ["valeur"]).map((c) => `<th>${esc(c)}</th>`).join("")}<th>Unité</th><th>Défaut</th><th>Justification</th><th></th></tr></thead><tbody>
+    ${g.items.map((p) => `<tr data-path="${esc(p.path)}" style="${p.modifie ? "background:#f1f7f4" : ""}"><td><b>${esc(p.label)}</b>${p.modifie ? ` <span class="chip ok">modifié</span>` : ""}${p.aide && p.aide !== g.items[0].aide ? `<div class="muted">${esc(p.aide)}</div>` : ""}</td>
+      ${fv(p.valeur).map((v, i) => `<td><input type="number" step="any" data-i="${i}" value="${v}" style="width:90px"></td>`).join("")}
+      <td class="muted">${esc(p.unite || "")}</td><td class="muted num" title="valeur par défaut">${showV(p.defaut)}</td>
+      <td><input type="text" data-note placeholder="source, retour d'expérience…" value="${esc(p.note || "")}" style="min-width:180px"></td>
+      <td>${p.modifie ? `<button class="btn sm sec" data-reset="${esc(p.path)}" title="Revenir à la valeur par défaut">↺</button>` : ""}</td></tr>`).join("")}
+    </tbody></table>
+    <button class="btn sm" data-save="${esc(g.nom)}" style="margin-top:8px">Enregistrer ce groupe</button></details></div>`; }).join("")}`;
+  document.querySelectorAll("#main details[data-g]").forEach((d) => (d.ontoggle = () => { if (d.open) open.add(d.dataset.g); else open.delete(d.dataset.g); }));
+  const after = async (res) => {
+    S.meta = await api("/api/meta");
+    if (S.weights && S.profile && S.meta.profiles[S.profile]) S.weights = { ...S.meta.profiles[S.profile].weights };
+    S.cache = {}; await loadSites(); renderSide();
+    await renderParametres();
+    if (res && res.erreurs && res.erreurs.length) $("#pa-err").innerHTML = `<div class="alert bad"><b>Valeurs refusées (l'ancienne valeur est conservée) :</b><ul style="margin:4px 0 0 16px;padding:0">${res.erreurs.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></div>`;
+    else toast("Paramètres enregistrés — scores recalculés.");
+  };
+  document.querySelectorAll("[data-save]").forEach((b) => (b.onclick = async () => {
+    const rows = b.closest("details").querySelectorAll("tr[data-path]");
+    const changes = [];
+    rows.forEach((tr) => {
+      const p = r.parametres.find((x) => x.path === tr.dataset.path);
+      const vals = [...tr.querySelectorAll("input[data-i]")].map((i) => i.value.replace(",", "."));
+      const value = p.composantes ? vals.map(Number) : Number(vals[0]);
+      const note = tr.querySelector("input[data-note]").value.trim() || null;
+      const same = JSON.stringify(fv(value)) === JSON.stringify(fv(p.valeur)) && (note || null) === (p.note || null);
+      if (!same) changes.push({ path: p.path, value, note });
+    });
+    if (!changes.length) { toast("Aucune modification dans ce groupe."); return; }
+    try { await after(await api("/api/parametres", { changes }, "PUT")); } catch (e) { toast("Erreur : " + e.message, 5000); }
+  }));
+  document.querySelectorAll("[data-reset]").forEach((b) => (b.onclick = async () => { await api(`/api/parametres/reset?path=${encodeURIComponent(b.dataset.reset)}`, {}); await after(); }));
+  $("#pa-reset").onclick = async () => { if (!confirm("Remettre tous les paramètres à leur valeur par défaut ?")) return; await api("/api/parametres/reset", {}); await after(); };
+  $("#pa-imp").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { const data = JSON.parse(await f.text()); await after(await api("/api/parametres/import", data)); }
+    catch (err) { toast("Import impossible : " + err.message, 5000); }
   };
 }
 

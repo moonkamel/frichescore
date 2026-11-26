@@ -1,0 +1,13 @@
+{
+  "count": 3,
+  "next": "https://apidf.test/cartofriches/friches/?code_insee=59512&page=2",
+  "previous": null,
+  "results": [
+    {"site_id": "59512_0001", "site_nom": "Ancienne filature", "site_type": "friche industrielle", "site_statut": "friche sans projet",
+     "comm_insee": "59512", "comm_nom": "Roubaix", "site_surface": 18450, "bati_surface": 7200, "bati_etat": "dégradé",
+     "urba_zone_type": "UE", "activite_libelle": "Filature de laine", "longitude": 3.171, "latitude": 50.692,
+     "l_basias": "NPC5912345|NPC5912346", "l_basol": "", "l_icpe": "0070.12345"},
+    {"site_id": "59512_0002", "site_nom": "Station-service", "site_type": "friche commerciale", "site_statut": "friche potentielle",
+     "comm_insee": "59512", "comm_nom": "Roubaix", "site_surface": "2 300", "longitude": 3.18, "latitude": 50.69}
+  ]
+}

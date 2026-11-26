@@ -1,14 +1,11 @@
 """Vues agrégées : carte de chaleur des coûts cachés et horloge ZAN."""
 from __future__ import annotations
 
-import json
 import statistics
 from datetime import date, timedelta
-from pathlib import Path
 
+from . import calendar
 from . import config as C
-
-WINDOWS_FILE = Path(__file__).resolve().parent.parent / "data" / "funding_windows.json"
 
 
 # ------------------------------------------------------------ coûts cachés
@@ -57,7 +54,7 @@ STAGE_MONTHS = {None: 6.0, "reperee": 6.0, "pre_etudiee": 3.0, "en_etude": 1.0, 
 
 
 def load_windows() -> dict:
-    return json.loads(WINDOWS_FILE.read_text(encoding="utf-8"))
+    return calendar.load()
 
 
 def _d(s: str) -> date:
@@ -116,7 +113,7 @@ def zan_clock(ranked: dict[str, dict], sites: dict, stages: dict[str, str], toda
             else:
                 continue
             matches.append({"id": sid, "nom": rec.get("nom"), "commune": rec.get("commune"), "usage": b["usage"],
-                            "score": b["g"]["global"], "stage": stage, "maturite": mat, "fenetre": w["id"],
+                            "score": b["g"]["global"], "stage": stage, "maturite": mat, "fenetre": w["id"], "fenetre_type": w.get("type"), "fenetre_statut": w.get("statut_verification"),
                             "fenetre_nom": w["nom"], "cloture": w["cloture"], "statut": statut,
                             "marge_jours": (close - ready).days, "maturite_requise": w.get("maturite_requise")})
     matches.sort(key=lambda m: (m["statut"] != "coïncide", m["marge_jours"]))
@@ -125,4 +122,4 @@ def zan_clock(ranked: dict[str, dict], sites: dict, stages: dict[str, str], toda
         d = _d(e["date"])
         jalons.append({**e, "passee": d < today, "jours_restants": (d - today).days})
     return {"aujourdhui": today.isoformat(), "fenetres": wins, "jalons": jalons, "correspondances": matches,
-            "avertissement": data.get("_avertissement")}
+            "types": data.get("types", {}), "avertissement": data.get("_avertissement")}

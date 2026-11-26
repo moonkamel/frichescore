@@ -8,8 +8,8 @@ services:
       - "${FRICHESCORE_PORT:-8010}:8000"
     volumes:
       - frichescore-data:/data
-      # Décommentez pour éditer le calendrier des financements sans reconstruire l'image :
-      # - ./app/data/funding_windows.json:/app/app/data/funding_windows.json
+      # Ce volume contient la base (friches, portfolio, saisies terrain, paramètres calibrés)
+      # et le calendrier des financements édité depuis l'interface (funding_windows.json).
     restart: unless-stopped
 
 volumes:

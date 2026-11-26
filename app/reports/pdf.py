@@ -314,6 +314,17 @@ def report_pdf(ctx: dict) -> bytes:
     for s_ in ctx["sources"]:
         rows.append([P(s_["source"], "cell"), str(s_["n"]), s_["dates"], s_["confiance"]])
     el.append(_table(rows, [110 * mm, 25 * mm, 60 * mm, 40 * mm]))
+    pm = ctx.get("parametres_modifies") or []
+    el.append(P("Annexe — paramètres de calcul", "h2"))
+    if pm:
+        el.append(P(f"{len(pm)} paramètre(s) calibré(s) par l'utilisateur par rapport aux valeurs par défaut :", "small"))
+        rows = [["Groupe", "Paramètre", "Valeur retenue", "Défaut", "Justification"]]
+        for x in pm:
+            f_ = lambda v: " / ".join(f"{a:g}" for a in v) if isinstance(v, (list, tuple)) else f"{v:g}"
+            rows.append([P(x["groupe"], "cell"), P(x["label"], "cell"), f_(x["valeur"]), f_(x["defaut"]), P(x["note"] or "—", "cell")])
+        el.append(_table(rows, [55 * mm, 70 * mm, 35 * mm, 35 * mm, 70 * mm]))
+    else:
+        el.append(P("Paramètres par défaut de FricheScore (ordres de grandeur non calibrés localement).", "small"))
     el.append(Spacer(0, 3 * mm))
     el.append(P("Méthode : chaque friche reçoit une note 0-100 sur cinq dimensions (potentiel par usage, risque de surcoût de "
                 "remise en état, friction réglementaire, attractivité économique, impact et financements). Le score global est "

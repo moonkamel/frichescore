@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS field_data (
     source TEXT, date TEXT, confiance TEXT, auteur TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS portfolio (
     friche_id TEXT PRIMARY KEY, stage TEXT, usage TEXT, notes TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS parametres (
+    path TEXT PRIMARY KEY, value TEXT NOT NULL, note TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS score_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, friche_id TEXT, ts TEXT, usage TEXT,
     global REAL, rang INTEGER, rang_sur INTEGER, dims TEXT, motif TEXT);
@@ -216,3 +218,24 @@ def history(fid: str) -> list[dict]:
     with conn() as c:
         return [{**dict(r), "dims": json.loads(r["dims"])} for r in
                 c.execute("SELECT * FROM score_history WHERE friche_id = ? ORDER BY ts, id", (fid,))]
+
+
+# ------------------------------------------------------------- paramètres
+def param_overrides() -> dict[str, dict]:
+    with conn() as c:
+        return {r["path"]: {"value": json.loads(r["value"]), "note": r["note"], "updated_at": r["updated_at"]}
+                for r in c.execute("SELECT * FROM parametres")}
+
+
+def set_param(path: str, value, note: str | None):
+    with conn() as c:
+        c.execute("INSERT INTO parametres VALUES (?,?,?,?) ON CONFLICT(path) DO UPDATE SET value=excluded.value, "
+                  "note=excluded.note, updated_at=excluded.updated_at", (path, json.dumps(value), note, now()))
+
+
+def delete_param(path: str | None = None):
+    with conn() as c:
+        if path is None:
+            c.execute("DELETE FROM parametres")
+        else:
+            c.execute("DELETE FROM parametres WHERE path = ?", (path,))

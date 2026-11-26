@@ -22,7 +22,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8010
 ```
 
-Tests : `pytest` (34 tests : règles de scoring, API de bout en bout, parseurs des connecteurs).
+Tests : `pytest` (61 tests : règles de scoring, API de bout en bout, connecteurs avec réponses simulées,
+import CSV tolérant, paramètres, calendrier).
 
 > ⚠️ **Jeu de démonstration synthétique.** Les 32 communes et EPCI sont réels, mais les ~250 friches et leurs
 > valeurs sont générées (graine fixe). Toutes les provenances portent la mention « (démo) » et un bandeau
@@ -68,6 +69,8 @@ et doivent être calibrées sur vos propres opérations.
 | **Horloge ZAN** | Échéances ZAN (SCoT 2027, PLU 2028, 2031) et fenêtres de financement, croisées avec la maturité estimée de chaque friche. |
 | **Jumeau** | Deux friches (ou une friche et un **site en extension**) côte à côte, usage simulé différent sur chacune, verdict en trois lignes. |
 | **Portfolio** | Pipeline repérée → pré-étudiée → en étude → abandonnée (glisser-déposer). Les **données terrain** saisies priment sur les bases nationales et font évoluer le score et le rang ; historique conservé. |
+| **Données** | Import CSV tolérant avec **vérification sans import**, **test de connexion** réel aux API, import d'un périmètre par codes INSEE. |
+| **Paramètres** | Coûts unitaires, VRD par usage, dépollution par signal (BASOL, BASIAS, ICPE…), sensibilité des usages, pénalités et délais de friction, confiance, seuils, profils : modifiables sans toucher au code, avec une justification par valeur, export/import JSON. |
 | **Exports** | Fiche de synthèse PDF par site, **rapport de pré-cadrage** PDF (short-list, contre-analyse, justification site par site, non-évaluables, annexe des sources), CSV du classement. |
 
 ## Données
@@ -76,17 +79,47 @@ et doivent être calibrées sur vos propres opérations.
 |---|---|---|
 | Cartofriches (API Données foncières Cerema) | Inventaire de base | Connecteur API + import CSV |
 | Géorisques : CASIAS (ex-BASIAS), instructions SSP (ex-BASOL), SIS, ICPE | Coût et friction | Connecteur API |
-| DVF géolocalisé | Attractivité | Calcul d'indicateurs à partir des fichiers geo-dvf (`app/ingest/connectors.py`) |
+| DVF géolocalisé | Attractivité | Connecteur (fichiers geo-dvf par commune) |
 | Cadastre / fichiers fonciers, SITADEL, INSEE/LOVAC, PLU(i) (GPU), portail de l'artificialisation, PVGIS… | Autres dimensions | Import CSV (une colonne par indicateur) |
 
-- Modèle d'import : `GET /api/import/modele.csv`. Les exports Cartofriches sont reconnus (`site_id`, `site_nom`, `comm_insee`, `site_surface`, `site_type`, `bati_surface`…).
-- Provenance par colonne : ajouter `<colonne>__source`, `<colonne>__date`, `<colonne>__confiance`.
-- Le calendrier des financements est un fichier éditable : [`app/data/funding_windows.json`](app/data/funding_windows.json).
-  Les échéances ZAN viennent des textes ; **les fenêtres de financement sont des exemples à vérifier** auprès des financeurs.
+### Connecteurs
 
-Les connecteurs Cartofriches/Géorisques demandent un accès Internet. Ils ont été écrits d'après la documentation
-publique et testés sur des réponses types, mais **pas contre les API réelles** (accès réseau indisponible pendant
-le développement) : à valider sur un premier périmètre avant usage en production.
+Onglet **Données → Tester la connexion** : appel réel sur une commune de test, avec l'URL appelée, le code HTTP,
+la durée, le résultat interprété et un extrait de la réponse brute. L'adresse de chaque API est modifiable dans le
+formulaire (ou par les variables `CARTOFRICHES_URL`, `GEORISQUES_URL`, `GEODVF_URL`) si elle a changé.
+
+Les erreurs (délai dépassé, proxy, HTTP 4xx/5xx, JSON illisible, format inattendu) sont traduites en messages clairs
+et ne font jamais planter l'outil. Un échec partiel n'invente rien : si l'API SIS ne répond pas, l'indicateur SIS
+reste « non renseigné » (et pèse sur la confiance), il n'est jamais mis à « non » par défaut.
+
+Le parsing est couvert par des tests avec des réponses simulées calquées sur les formats publics
+(`tests/test_connectors.py`, `tests/fixtures/`). **Les connecteurs n'ont pas encore été validés contre les API
+réelles** (accès réseau bloqué pendant le développement) : c'est la première chose à faire avec le bouton de test.
+
+### Import CSV
+
+- Séparateur (`;` `,` tabulation `|`) et encodage (UTF-8, Windows/Excel) détectés automatiquement.
+- En-têtes acceptés : clé (`surface_m2`), libellé (« Surface du site (m²) ») ou nom Cartofriches (`site_surface`).
+- Formats tolérés : `12 000,5`, `1 500 m²`, `oui/non/vrai/faux/1/0`, zones PLU `1AUh` → `AU`, accents et majuscules.
+- **Vérifier sans importer** produit un rapport « ligne X, colonne Y, problème Z », exportable en CSV. Une cellule
+  invalide est ignorée sans bloquer la ligne ; une ligne n'est rejetée que si elle n'a ni code INSEE ni coordonnées.
+- Modèle : `GET /api/import/modele.csv` ; dictionnaire des colonnes : `GET /api/import/dictionnaire.csv`.
+- Provenance par colonne : ajouter `<colonne>__source`, `<colonne>__date`, `<colonne>__confiance`.
+
+### Calendrier des financements
+
+Éditable dans **Horloge ZAN → Modifier le calendrier** (formulaire ou JSON avancé, validé avant enregistrement).
+Chaque dispositif porte un statut **vérifié / à vérifier**, une date de vérification et l'adresse de la page officielle ;
+la frise et les correspondances peuvent être filtrées par type de financement et limitées aux fenêtres vérifiées.
+Le fichier est stocké à côté de la base (`funding_windows.json`, dans le volume Docker). Les échéances ZAN viennent
+des textes ; **les fenêtres livrées par défaut sont des exemples à remplacer par les calendriers officiels.**
+
+### Paramètres
+
+Les valeurs par défaut sont dans [`app/scoring/config.py`](app/scoring/config.py) ; les valeurs calibrées sont
+stockées en base et s'appliquent immédiatement. Le rapport de pré-cadrage liste en annexe les paramètres modifiés
+et leur justification. Les règles de pertinence par usage (dimension 1 : seuils de surface, distances…) restent
+dans [`app/scoring/usages.py`](app/scoring/usages.py).
 
 ## Architecture
 
@@ -101,6 +134,10 @@ app/
   main.py       API FastAPI · service.py orchestration · db.py SQLite
 frontend/       interface HTML/CSS/JS sans dépendance externe (fonctionne hors ligne)
 ```
+
+Le fond de carte (contours départementaux simplifiés) provient d'IGN Admin Express COG 2018 via
+[gregoiredavid/france-geojson](https://github.com/gregoiredavid/france-geojson), sous Licence Ouverte Etalab ;
+il est embarqué dans `frontend/departements.json` pour fonctionner hors ligne.
 
 Le score global est recalculé dans le navigateur quand on bouge les curseurs (`frontend/app.js : globalScore`,
 miroir de `engine.global_score`) ; tout le reste est calculé côté serveur.
