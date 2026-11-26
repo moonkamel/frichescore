@@ -1088,7 +1088,9 @@ function netDiag(d) {
     <p style="margin:6px 0"><b>${esc(d.conclusion || "")}</b></p>
     ${(d.adresses || []).length ? `<table class="fv"><thead><tr><th>Adresse</th><th>Famille</th><th>Connexion TCP (port 443)</th><th>Durée</th></tr></thead><tbody>
       ${d.adresses.map((a) => `<tr><td><code>${esc(a.ip)}</code></td><td>${a.famille}</td><td>${a.ok ? `<span class="chip ok">réussie</span>` : `<span class="chip bad">échec</span> ${esc(a.erreur || "")}`}</td><td class="num">${a.duree_ms} ms</td></tr>`).join("")}</tbody></table>` : ""}
-    <p class="small muted" style="margin:6px 0 0">IPv4 forcée : ${d.ipv4_force ? "oui" : "non"} · proxy configuré pour FricheScore : ${d.proxy && Object.keys(d.proxy).length ? esc(Object.entries(d.proxy).map(([k, v]) => k + "=" + v).join(", ")) : "aucun"}</p></div>`;
+    ${d.tls ? `<table class="fv" style="margin-top:6px"><thead><tr><th>Négociation TLS vers ${esc(d.tls.ip)}</th><th>Résultat</th><th>Durée</th></tr></thead><tbody>
+      ${[["standard (message ~1 500 octets)", d.tls.standard], ["compacte (message ~500 octets)", d.tls.compact]].map(([l, t]) => `<tr><td>${l}</td><td>${t.ok ? `<span class="chip ok">réussie</span> ${esc(t.version || "")}` : `<span class="chip bad">échec</span> ${esc(t.erreur || "")}`}</td><td class="num">${t.duree_ms} ms</td></tr>`).join("")}</tbody></table>` : ""}
+    <p class="small muted" style="margin:6px 0 0">${esc(d.openssl || "")} · TLS compact : ${d.tls_compact ? "oui" : "non"} · IPv4 forcée : ${d.ipv4_force ? "oui" : "non"} · proxy : ${d.proxy && Object.keys(d.proxy).filter((k) => !/no_proxy/i.test(k)).length ? esc(Object.entries(d.proxy).filter(([k]) => !/no_proxy/i.test(k)).map(([k, v]) => k + "=" + v).join(", ")) : "aucun"}</p></div>`;
 }
 function importReport(r, fname) {
   const dry = r.mode === "vérification";

@@ -29,6 +29,7 @@ import io
 import json
 import os
 import socket
+import ssl
 import statistics
 import time
 from datetime import date
@@ -53,6 +54,29 @@ MAX_PAGES = 50
 # repli automatique, la connexion attend alors jusqu'au délai maximal. Désactivable : FRICHESCORE_FORCE_IPV4=0.
 FORCE_IPV4 = os.environ.get("FRICHESCORE_FORCE_IPV4", "1").lower() not in ("0", "false", "non", "no")
 
+# Message d'ouverture TLS compact : OpenSSL ≥ 3.5 (image python:3.12-slim) propose par défaut un échange de clés
+# post-quantique qui porte le ClientHello à ~1 500 octets. Certains réseaux (Docker Desktop/WSL2, VPN, pare-feux)
+# perdent ce paquet sans réponse : la connexion TCP réussit mais la négociation TLS reste bloquée. En limitant
+# l'échange de clés à la courbe standard P-256, le ClientHello retombe à ~500 octets (toujours en TLS 1.3).
+# Désactivable : FRICHESCORE_TLS_COMPACT=0.
+TLS_COMPACT = os.environ.get("FRICHESCORE_TLS_COMPACT", "1").lower() not in ("0", "false", "non", "no")
+
+
+def ssl_context(compact: bool | None = None) -> ssl.SSLContext:
+    """Contexte TLS vérifiant les certificats (certifi, ou SSL_CERT_FILE pour une autorité d'entreprise)."""
+    cafile = os.environ.get("SSL_CERT_FILE")
+    if not cafile:
+        try:
+            import certifi
+            cafile = certifi.where()
+        except ImportError:
+            cafile = None
+    ctx = ssl.create_default_context(cafile=cafile)
+    if TLS_COMPACT if compact is None else compact:
+        ctx.set_ecdh_curve("prime256v1")
+    return ctx
+
+
 # Transport injectable (tests : httpx.MockTransport)
 TRANSPORT: httpx.BaseTransport | None = None
 
@@ -65,12 +89,25 @@ class ConnectorError(Exception):
         self.message, self.url, self.status, self.body = message, url, status, body
 
 
-def _transport() -> httpx.BaseTransport | None:
+def _transport() -> httpx.BaseTransport:
     if TRANSPORT is not None:
         return TRANSPORT
-    if FORCE_IPV4:
-        return httpx.HTTPTransport(local_address="0.0.0.0")  # lier une adresse IPv4 = connexions IPv4 uniquement
-    return None
+    # lier une adresse IPv4 locale = connexions IPv4 uniquement
+    return httpx.HTTPTransport(verify=ssl_context(), local_address="0.0.0.0" if FORCE_IPV4 else None)
+
+
+def tls_probe(host: str, ip: str, port: int = 443, compact: bool = False, timeout: float = 8.0) -> dict:
+    """Tente une négociation TLS complète vers une adresse donnée."""
+    t0 = time.monotonic()
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            with ssl_context(compact).wrap_socket(sock, server_hostname=host) as t:
+                v = t.version()
+        return {"ok": True, "version": v, "duree_ms": round((time.monotonic() - t0) * 1000), "erreur": None}
+    except (OSError, ssl.SSLError) as e:
+        return {"ok": False, "version": None, "duree_ms": round((time.monotonic() - t0) * 1000),
+                "erreur": ("délai dépassé" if isinstance(e, (socket.timeout, TimeoutError)) else str(e))[:140]}
 
 
 def proxy_env() -> dict:
@@ -86,7 +123,8 @@ def network_diagnostic(url: str, port: int = 443, timeout: float = 5.0) -> dict:
     """Diagnostic réseau depuis la machine (ou le conteneur) qui exécute FricheScore :
     résolution DNS, puis tentative de connexion TCP sur chaque adresse IPv4 et IPv6."""
     host = urlparse(url).hostname or url
-    diag = {"hote": host, "ipv4_force": FORCE_IPV4, "proxy": proxy_env(), "adresses": [], "conclusion": ""}
+    diag = {"hote": host, "ipv4_force": FORCE_IPV4, "tls_compact": TLS_COMPACT, "openssl": ssl.OPENSSL_VERSION,
+            "proxy": proxy_env(), "adresses": [], "tls": None, "conclusion": ""}
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
@@ -109,17 +147,35 @@ def network_diagnostic(url: str, port: int = 443, timeout: float = 5.0) -> dict:
                                  "duree_ms": round((time.monotonic() - t0) * 1000), "erreur": err})
     v4 = [a for a in diag["adresses"] if a["famille"] == "IPv4"]
     v6 = [a for a in diag["adresses"] if a["famille"] == "IPv6"]
+    reach = next((a for a in v4 if a["ok"]), None) or next((a for a in v6 if a["ok"]), None)
+    if reach and port == 443:
+        std = tls_probe(host, reach["ip"], port, compact=False)
+        cmp_ = tls_probe(host, reach["ip"], port, compact=True)
+        diag["tls"] = {"ip": reach["ip"], "standard": std, "compact": cmp_}
+        if cmp_["ok"] and not std["ok"]:
+            diag["conclusion"] = ("la connexion TCP réussit mais la négociation TLS standard (message d'ouverture ~1 500 octets) "
+                                  "reste sans réponse, alors que la négociation compacte aboutit : le réseau perd les gros paquets "
+                                  "(MTU Docker/VPN ou pare-feu). Garder FRICHESCORE_TLS_COMPACT=1 (réglage par défaut)."
+                                  + ("" if TLS_COMPACT else " ATTENTION : le mode compact est actuellement désactivé."))
+            return diag
+        if not cmp_["ok"] and not std["ok"]:
+            diag["conclusion"] = ("la connexion TCP réussit mais aucune négociation TLS n'aboutit : un équipement réseau "
+                                  "(pare-feu, inspection TLS, antivirus) bloque le chiffrement depuis cette machine. Si une "
+                                  "autorité de certification d'entreprise est utilisée, renseigner SSL_CERT_FILE ; sinon, lancer "
+                                  "FricheScore sans Docker.")
+            return diag
     if any(a["ok"] for a in v4):
         diag["conclusion"] = ("le serveur est joignable en IPv4 depuis cette machine"
                               + (" mais pas en IPv6 : garder l'option IPv4 forcée (réglage par défaut)." if v6 and not any(a["ok"] for a in v6) else ".")
-                              + (" Un proxy est configuré : s'il bloque ce domaine, l'appel HTTPS échouera malgré tout." if diag["proxy"] else ""))
+                              + (" Un proxy est configuré : s'il bloque ce domaine, l'appel HTTPS échouera malgré tout."
+                                 if any(k.lower() != "no_proxy" for k in diag["proxy"]) else ""))
     elif any(a["ok"] for a in v6):
         diag["conclusion"] = "le serveur n'est joignable qu'en IPv6 : désactiver l'IPv4 forcée (FRICHESCORE_FORCE_IPV4=0)."
     else:
         diag["conclusion"] = ("aucune adresse du serveur n'est joignable depuis cette machine. Si FricheScore tourne dans Docker "
                               "alors que le navigateur ou PowerShell accèdent au site, le PC passe sans doute par un proxy ou un VPN "
                               "que le conteneur ne connaît pas : renseigner HTTPS_PROXY avant « docker compose up », ou lancer "
-                              "FricheScore sans Docker." + ("" if diag["proxy"] else " Aucun proxy n'est configuré pour FricheScore."))
+                              "FricheScore sans Docker." + ("" if any(k.lower() != "no_proxy" for k in diag["proxy"]) else " Aucun proxy n'est configuré pour FricheScore."))
     return diag
 
 

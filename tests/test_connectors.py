@@ -212,9 +212,31 @@ def test_transport_ipv4_par_defaut(monkeypatch):
     monkeypatch.setattr(K, "FORCE_IPV4", True)
     assert isinstance(K._transport(), httpx.HTTPTransport)
     monkeypatch.setattr(K, "FORCE_IPV4", False)
-    assert K._transport() is None
+    assert isinstance(K._transport(), httpx.HTTPTransport)
 
 
 def test_proxy_env_masque_identifiants(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://user:secret@proxy.local:8080")
     assert "secret" not in str(K.proxy_env())
+
+
+def test_contexte_tls_compact_reduit_le_clienthello():
+    """Le mode compact doit produire un ClientHello nettement plus petit (pas d'échange de clés post-quantique)."""
+    import ssl as _ssl
+
+    def hello_size(ctx):
+        inc, out = _ssl.MemoryBIO(), _ssl.MemoryBIO()
+        obj = ctx.wrap_bio(inc, out, server_hostname="exemple.fr")
+        try:
+            obj.do_handshake()
+        except _ssl.SSLWantReadError:
+            pass
+        return len(out.read())
+    std, cmp_ = hello_size(K.ssl_context(compact=False)), hello_size(K.ssl_context(compact=True))
+    assert cmp_ <= std and cmp_ < 1200
+    assert K.ssl_context().verify_mode == _ssl.CERT_REQUIRED  # les certificats restent vérifiés
+
+
+def test_transport_reel_utilise_contexte_tls(monkeypatch):
+    monkeypatch.setattr(K, "TRANSPORT", None)
+    assert isinstance(K._transport(), httpx.HTTPTransport)
