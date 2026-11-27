@@ -228,3 +228,9 @@ svg text { font-family: inherit; }
 
 .tab-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: #d9a441; color: #1d2a33; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; }
 tr.muted td { opacity: .62; }
+
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg, #f3f4ef); padding: 16px; }
+.login-card { width: 100%; max-width: 380px; background: #fff; border: 1px solid var(--line, #e2e4dc); border-radius: 12px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,.06); }
+.login-card input { width: 100%; }
+.user-pop { position: fixed; top: 58px; right: 16px; z-index: 60; width: 300px; background: #fff; border: 1px solid var(--line, #e2e4dc); border-radius: 10px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.12); }
+.user-pop input { width: 100%; }

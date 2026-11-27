@@ -81,15 +81,20 @@ TITRES = {
 }
 
 
-def scan_bodacc(sites: dict[str, Record], progress=None) -> dict:
-    """Interroge le BODACC pour chaque SIREN lié à une friche réelle et enregistre les nouveaux signaux."""
+def scan_bodacc(sites: dict[str, Record], progress=None, saisies_seulement: bool = False) -> dict:
+    """Interroge le BODACC pour chaque SIREN lié à une friche réelle et enregistre les nouveaux signaux.
+    `saisies_seulement` : uniquement les SIREN propriétaires saisis par l'organisme (signaux privés)."""
     cibles: dict[str, list[tuple[str, str]]] = {}  # siren -> [(friche, rôle)]
     for sid, rec in sites.items():
         if str(rec.get("_origine") or "").startswith("demo"):
             continue
-        prop = K.siren_of(rec.get("siren_proprietaire"))
+        prov = rec.prov.get("siren_proprietaire")
+        saisi = bool(prov and str(prov.methode or "").startswith("saisie terrain"))
+        prop = K.siren_of(rec.get("siren_proprietaire")) if (saisi or not saisies_seulement) else None
         if prop:
             cibles.setdefault(prop, []).append((sid, "la société propriétaire"))
+        if saisies_seulement:
+            continue
         for s in rec.get("siren_exploitants") or []:
             s = K.siren_of(s)
             if s and s != prop:

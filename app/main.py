@@ -5,13 +5,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.routing import APIRoute
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, service
+from . import auth, db, service, tenant
 from .ingest import connectors
 from .scoring import config as C
 from .scoring.analytics import load_windows
@@ -30,6 +31,32 @@ async def lifespan(_app):
 app = FastAPI(title="FricheScore", version="0.1.0", lifespan=lifespan,
               description="Moteur de priorisation des friches : score à 5 dimensions, explicable et tracé.")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.include_router(auth.router)
+
+
+@app.middleware("http")
+async def _contexte(request: Request, call_next):
+    """Organisme et utilisateur de la requête ; contrôle des rôles en mode en ligne."""
+    path, method = request.url.path, request.method
+    if not tenant.auth_enabled():
+        t = tenant.set_context(tenant.LOCAL, None)
+        try:
+            return await call_next(request)
+        finally:
+            tenant.reset_context(t)
+    if not path.startswith("/api/") or (method, path) in auth.OUVERT:
+        return await call_next(request)
+    u = auth.user_from_request(request)
+    if not u:
+        return JSONResponse(status_code=401, content={"detail": "connexion requise"})
+    if not auth.allowed(u["role"], method, path):
+        return JSONResponse(status_code=403, content={"detail": f"action réservée au rôle « {tenant.ROLE_LBL[auth.required_role(method, path)]} »"})
+    org = tenant.PLATEFORME if u["role"] == "admin_plateforme" else u["organisme_id"]
+    t = tenant.set_context(org, u)
+    try:
+        return await call_next(request)
+    finally:
+        tenant.reset_context(t)
 
 
 class Perimeter(BaseModel):
@@ -416,15 +443,18 @@ def communes_enrich(r: CommunesReq):
 @app.get("/api/ingest/jobs")
 def ingest_jobs():
     """Tâches de fond : en cours, puis terminées (les plus récentes d'abord)."""
-    jobs = sorted(_JOBS.values(), key=lambda j: (j["etat"] != "en_cours", -j["debut"]))
+    from .jobs import visible
+    jobs = sorted(visible(), key=lambda j: (j["etat"] != "en_cours", -j["debut"]))
     return {"taches": [{k: v for k, v in j.items() if k != "rapport"} | {"a_un_rapport": j["rapport"] is not None} for j in jobs[:20]]}
 
 
 @app.get("/api/ingest/jobs/{jid}")
 def ingest_job(jid: str):
-    if jid not in _JOBS:
+    from .jobs import visible
+    j = next((x for x in visible() if x["id"] == jid), None)
+    if j is None:
         raise HTTPException(404, "tâche inconnue (le serveur a peut-être redémarré)")
-    return _JOBS[jid]
+    return j
 
 
 class ConnTestReq(BaseModel):
@@ -624,9 +654,37 @@ def pack_get(nom: str):
     return FileResponse(f, media_type="application/gzip", filename=f"{dep}.json.gz")
 
 
+@app.exception_handler(KeyError)
+async def _introuvable(request, exc):
+    return JSONResponse(status_code=404, content={"detail": f"introuvable : {exc}"})
+
+
+@app.exception_handler(PermissionError)
+async def _interdit(request, exc):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def _err(request, exc):
     return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"})
+
+
+# ------------------------------------------------------------------- paramètres par organisme
+def _with_org_params(fn):
+    """Chaque appel calcule avec les paramètres de son organisme (voir tenant.PARAMS)."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        with tenant.PARAMS.use(tenant.org()):
+            return fn(*a, **kw)
+    return run
+
+
+for _r in app.routes:
+    if isinstance(_r, APIRoute) and _r.path.startswith("/api/") and not _r.path.startswith("/api/auth") \
+            and not __import__("asyncio").iscoroutinefunction(_r.dependant.call):
+        _r.dependant.call = _with_org_params(_r.dependant.call)
 
 
 # ------------------------------------------------------------------- front

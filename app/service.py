@@ -30,8 +30,9 @@ def load_demo(seed: int = 42):
 
 
 def ensure_seed():
+    from . import tenant
     db.init()
-    if db.is_empty():
+    if db.is_empty() and not tenant.auth_enabled():  # en ligne, pas de données fictives mêlées à celles des clients
         load_demo()
     apply_params()
 
@@ -214,7 +215,14 @@ def portfolio_view(weights, d5):
     return {"items": items, "stages": STAGES}
 
 
+def ensure_visible(sid: str) -> None:
+    """Refuse d'écrire sur une friche que l'organisme courant ne voit pas."""
+    if sid not in db.friche_origins():
+        raise KeyError(sid)
+
+
 def portfolio_set(sid, stage, usage, notes, weights, d5):
+    ensure_visible(sid)
     if stage not in STAGES:
         raise ValueError("étape inconnue")
     prev = db.portfolio().get(sid)
@@ -226,6 +234,7 @@ def portfolio_set(sid, stage, usage, notes, weights, d5):
 
 
 def field_add(sid, key, value, source, date_, confiance, auteur, weights, d5):
+    ensure_visible(sid)
     if key not in CATALOG:
         raise ValueError(f"indicateur inconnu : {key}")
     v = coerce(key, value)
@@ -464,7 +473,10 @@ def catalog():
 
 # ------------------------------------------------------------- paramètres
 def apply_params() -> list[str]:
-    return params.apply({p: o["value"] for p, o in db.param_overrides().items()})
+    """Réapplique les paramètres de l'organisme courant (pendant que ses calculs sont autorisés)."""
+    from . import tenant
+    tenant.PARAMS.invalidate(tenant.org())
+    return []
 
 
 def params_view() -> dict:
@@ -645,13 +657,18 @@ def ingest_cartofriches(codes: list[str], georisques: bool = True, dvf: bool = T
 def ia_status() -> dict:
     import os
     from .ia import extraction as E
+    from . import tenant
     quota = int(os.environ.get("FRICHESCORE_IA_QUOTA_MOIS", "200"))
+    o = db.org_get(tenant.org()) if tenant.org() else None
+    if o and o.get("quota_ia") is not None:
+        quota = int(o["quota_ia"])  # quota propre à l'organisme (abonnement)
     return {"active": E.configured(), "modele": E.MODEL, "quota_mois": quota, **db.ia_month_stats(),
             "prix": {"entree_usd_par_million": E.PRIX_ENTREE, "sortie_usd_par_million": E.PRIX_SORTIE}}
 
 
 def ia_start(sid: str, fichier: str, data: bytes) -> tuple[str, callable]:
     """Vérifie et enregistre le document, puis renvoie (id d'extraction, fonction à exécuter en tâche de fond)."""
+    ensure_visible(sid)
     import hashlib
     import uuid
     from .ia import extraction as E
@@ -659,7 +676,7 @@ def ia_start(sid: str, fichier: str, data: bytes) -> tuple[str, callable]:
     if not st["active"]:
         raise E.IAError("extraction IA non activée : renseigner ANTHROPIC_API_KEY (voir README)")
     if st["documents"] >= st["quota_mois"]:
-        raise E.IAError(f"quota mensuel atteint ({st['quota_mois']} documents) : réglable par FRICHESCORE_IA_QUOTA_MOIS")
+        raise E.IAError(f"quota mensuel atteint ({st['quota_mois']} documents) pour votre organisme")
     sites = db.load_sites({"type": "ids", "values": [sid]})
     if sid not in sites:
         raise KeyError(sid)

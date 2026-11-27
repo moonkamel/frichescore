@@ -52,6 +52,7 @@ async function api(path, body, method) {
   if (body !== undefined && !(body instanceof FormData)) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   else if (body instanceof FormData) opt.body = body;
   const r = await fetch(path, opt);
+  if (r.status === 401 && !path.startsWith("/api/auth/")) { showLogin("Votre session a expiré : reconnectez-vous."); throw new Error("connexion requise"); }
   if (!r.ok) {
     let m = r.statusText;
     try { m = (await r.json()).detail || m; } catch (e) { /* noop */ }
@@ -147,7 +148,55 @@ function ranking() {
 }
 
 /* ------------------------------------------------------------- démarrage */
+function role() { return S.user ? S.user.role : "admin_plateforme"; }  // mode local : tous les droits
+const ROLE_RANG = { lecteur: 0, analyste: 1, admin: 2, admin_plateforme: 3 };
+function peut(r) { return ROLE_RANG[role()] >= ROLE_RANG[r]; }
+function showLogin(msg) {
+  if (showLogin._on) return; showLogin._on = true;
+  document.body.innerHTML = `<div class="login-wrap"><form class="login-card" id="login-form" autocomplete="on">
+    <div class="brand" style="margin-bottom:14px"><span class="logo">F</span><div><strong style="color:var(--ink)">FricheScore</strong><small style="display:block;color:var(--muted)">Quelles friches méritent une étude en premier, et pourquoi</small></div></div>
+    ${msg ? `<div class="alert info small">${esc(msg)}</div>` : ""}
+    <label class="small muted">Adresse électronique</label><input type="email" id="lg-email" autocomplete="username" required autofocus>
+    <label class="small muted" style="margin-top:8px;display:block">Mot de passe</label><input type="password" id="lg-pw" autocomplete="current-password" required>
+    <div id="lg-err" class="small delta-neg" style="min-height:18px;margin-top:6px"></div>
+    <button class="btn" type="submit" style="width:100%;margin-top:4px">Se connecter</button>
+    <p class="small muted" style="margin-top:12px">Mot de passe oublié ou nouveau collaborateur : contactez l'administrateur de votre organisme.</p></form></div>`;
+  $("#login-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("/api/auth/connexion", { email: $("#lg-email").value, mot_de_passe: $("#lg-pw").value }); location.reload(); }
+    catch (er) { $("#lg-err").textContent = er.message; }
+  };
+}
+function userMenu() {
+  const old = $("#user-pop"); if (old) { old.remove(); return; }
+  const u = S.user;
+  const d = document.createElement("div"); d.id = "user-pop"; d.className = "user-pop";
+  d.innerHTML = `<b>${esc(u.nom || u.email)}</b><div class="small muted">${esc(u.email)}</div>
+    <div class="small" style="margin:6px 0">${esc(u.organisme ? u.organisme.nom : "Plateforme")} · ${esc(u.role_libelle)}</div>
+    <details style="margin:6px 0"><summary class="small">Changer de mot de passe</summary>
+      <input type="password" id="pw-old" placeholder="Mot de passe actuel" autocomplete="current-password" style="margin-top:6px">
+      <input type="password" id="pw-new" placeholder="Nouveau (12 caractères, majuscules, minuscules, chiffres)" autocomplete="new-password" style="margin-top:6px">
+      <button class="btn sm" id="pw-go" style="margin-top:6px">Modifier</button><div id="pw-out" class="small" style="margin-top:4px"></div></details>
+    <button class="btn sm sec" id="logout" style="width:100%">Se déconnecter</button>`;
+  document.body.appendChild(d);
+  $("#logout").onclick = async () => { await api("/api/auth/deconnexion", {}); location.reload(); };
+  $("#pw-go").onclick = async () => {
+    try { const r = await api("/api/auth/mot-de-passe", { actuel: $("#pw-old").value, nouveau: $("#pw-new").value }); $("#pw-out").textContent = r.message; setTimeout(() => location.reload(), 1500); }
+    catch (e) { $("#pw-out").innerHTML = `<span class="delta-neg">${esc(e.message)}</span>`; }
+  };
+}
+
 async function boot() {
+  let moi;
+  try { moi = await api("/api/auth/moi"); } catch (e) { showLogin(); return; }
+  S.user = moi.utilisateur;
+  if (S.user) {
+    const b = $("#btn-user"); b.hidden = false;
+    b.textContent = `👤 ${S.user.nom || S.user.email.split("@")[0]}`;
+    b.title = `${S.user.organisme ? S.user.organisme.nom : "Plateforme"} · ${S.user.role_libelle}`;
+    b.onclick = userMenu;
+    if (peut("admin")) TABS.push(["comptes", S.user.role === "admin_plateforme" ? "Organismes" : "Comptes"]);
+  }
   S.meta = await api("/api/meta");
   S.weights = { ...S.meta.profiles.equilibre.weights };
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join("");
@@ -209,7 +258,7 @@ function setTab(t) {
   render();
 }
 function render() {
-  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, signaux: renderSignaux, donnees: renderDonnees, parametres: renderParametres }[S.tab];
+  const f = { classement: renderClassement, contre: renderContre, couts: renderCouts, zan: renderZan, jumeau: renderJumeau, portfolio: renderPortfolio, signaux: renderSignaux, comptes: renderComptes, donnees: renderDonnees, parametres: renderParametres }[S.tab];
   f();
 }
 function perimeterLabel() {
@@ -1241,7 +1290,7 @@ async function renderDonnees() {
   <div class="card"><h3>Tâches de fond</h3><p class="small muted" style="margin:4px 0 6px">Imports et mises à jour tournent sur le serveur : vous pouvez quitter la page ou fermer le navigateur, leur avancement s'affiche ici à votre retour.</p><div id="jobs-box">${jobsHtml(S.jobs || [])}</div></div>
   <div class="grid2">
     <div class="card"><h3>Données chargées</h3><table style="margin-top:6px"><tbody>${m.perimeters.origines.map((o) => `<tr><td>${esc(o.origine)}</td><td class="num">${o.n} friches</td><td><button class="btn sm sec" data-delorig="${esc(o.origine)}">Retirer</button></td></tr>`).join("")}</tbody></table>
-      <button class="btn sec sm" id="reset-demo" style="margin-top:10px">Réinitialiser le jeu de démonstration</button>
+      ${peut("admin_plateforme") ? `<button class="btn sec sm" id="reset-demo" style="margin-top:10px">Réinitialiser le jeu de démonstration</button>` : ""}
       <p class="hint">La réinitialisation efface aussi le portfolio et les données terrain.</p></div>
     <div class="card"><h3>Importer un fichier CSV</h3>
       <p class="small muted">Séparateur (point-virgule, virgule, tabulation) et encodage (UTF-8 ou Windows/Excel) détectés automatiquement. Les colonnes peuvent porter la clé (<code>surface_m2</code>), le libellé (« Surface du site (m²) ») ou un nom Cartofriches (<code>site_surface</code>). Les cellules invalides sont signalées et ignorées, sans bloquer le reste.</p>
@@ -1295,7 +1344,7 @@ async function renderDonnees() {
   <div class="card"><details><summary>Catalogue des ${Object.keys(m.catalog).length} indicateurs (source de référence et confiance par défaut)</summary>
     <table class="fv"><thead><tr><th>Clé</th><th>Indicateur</th><th>Source de référence</th><th>Confiance par défaut</th><th>Valeurs</th></tr></thead><tbody>
     ${Object.entries(m.catalog).map(([k, c]) => `<tr><td><code>${k}</code></td><td>${esc(c.label)}</td><td>${esc(c.source)}</td><td>${esc(c.confiance)}</td><td class="small">${esc((c.valeurs || []).join(", "))}</td></tr>`).join("")}</tbody></table></details></div>`;
-  $("#reset-demo").onclick = async () => { if (!confirm("Réinitialiser le jeu de démonstration ? Le portfolio et les données terrain seront effacés.")) return; await api("/api/demo/reset", {}); S.meta = await api("/api/meta"); await loadSites(); renderSide(); render(); toast("Jeu de démonstration rechargé."); };
+  if ($("#reset-demo")) $("#reset-demo").onclick = async () => { if (!confirm("Réinitialiser le jeu de démonstration ? Le portfolio et les données terrain seront effacés.")) return; await api("/api/demo/reset", {}); S.meta = await api("/api/meta"); await loadSites(); renderSide(); render(); toast("Jeu de démonstration rechargé."); };
   document.querySelectorAll("[data-delorig]").forEach((b) => (b.onclick = async () => { if (!confirm(`Retirer toutes les friches « ${b.dataset.delorig} » ?`)) return; await api(`/api/donnees/${encodeURIComponent(b.dataset.delorig)}`, undefined, "DELETE"); S.meta = await api("/api/meta"); await loadSites(); renderSide(); render(); }));
   const doImport = async (dry) => {
     const f = $("#imp-file").files[0]; if (!f) { toast("Choisissez un fichier."); return; }
@@ -1453,6 +1502,7 @@ function majDetail(r) {
 }
 async function renderMaj() {
   const box = $("#maj-card"); if (!box) return;
+  if (!peut("admin_plateforme")) { box.remove(); return; }
   let st;
   try { st = await api("/api/maj"); } catch (e) { box.innerHTML = `<h3>Mise à jour automatique et packs de données</h3><div class="alert bad">${esc(e.message)}</div>`; return; }
   const r = st.reglages;
@@ -1590,6 +1640,66 @@ function bindSignalRows(after) {
     e.stopPropagation();
     await api("/api/signaux/vu", { ids: [+b.dataset.sigVu], vu: b.dataset.v === "1" });
     refreshSignalBadge(); loadSites(true); after();
+  }));
+}
+async function renderComptes() {
+  const pf = role() === "admin_plateforme";
+  $("#main").innerHTML = `<div class="section-head"><div><h2>${pf ? "Organismes et comptes" : "Comptes de l'organisme"}</h2><p>${pf ? "Chaque organisme client dispose de son propre espace : friches importées, saisies terrain, portfolio, documents, notes, paramètres et calendrier. La base commune (Cartofriches, indicateurs communaux, signaux publics) est partagée et mise à jour la nuit." : "Les comptes de votre organisme partagent ses données. Lecteur : consultation et exports. Analyste : saisies, imports, portfolio, documents et IA. Administrateur : en plus, les comptes, les paramètres et le calendrier."}</p></div></div><div class="card loading">Chargement…</div>`;
+  let orgs = [], comptes;
+  try {
+    if (pf) orgs = (await api("/api/organismes")).organismes;
+    comptes = await api("/api/comptes");
+  } catch (e) { $("#main").lastElementChild.outerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  const roles = Object.entries(comptes.roles).filter(([k]) => pf || k !== "admin_plateforme");
+  const orgNom = Object.fromEntries(orgs.map((o) => [o.id, o.nom]));
+  $("#main").lastElementChild.outerHTML = `
+    ${pf ? `<div class="card"><h3>Organismes</h3>
+      <table class="fv" style="margin-top:6px"><thead><tr><th>Identifiant</th><th>Nom</th><th>Comptes</th><th>Quota IA / mois</th><th>Créé le</th><th>État</th><th></th></tr></thead><tbody>
+      ${orgs.map((o) => `<tr><td><code>${esc(o.id)}</code></td><td>${esc(o.nom)}</td><td class="num">${o.utilisateurs}</td><td class="num"><input type="number" min="0" value="${o.quota_ia ?? ""}" placeholder="défaut" data-quota="${esc(o.id)}" style="width:90px"></td><td class="small">${esc((o.cree_le || "").slice(0, 10))}</td>
+        <td>${o.actif ? `<span class="chip ok">actif</span>` : `<span class="chip bad">suspendu</span>`}</td><td><button class="btn sm sec" data-org-actif="${esc(o.id)}" data-v="${o.actif ? 0 : 1}">${o.actif ? "Suspendre" : "Réactiver"}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">Aucun organisme.</td></tr>`}</tbody></table>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap"><input type="text" id="org-id" placeholder="identifiant (ex. epf-hdf)" style="max-width:200px"><input type="text" id="org-nom" placeholder="Nom (ex. EPF Hauts-de-France)"><input type="number" id="org-quota" placeholder="Quota IA (documents / mois)" style="max-width:220px"><button class="btn" id="org-add" style="flex:0;white-space:nowrap">Créer l'organisme</button></div>
+      <div id="org-out" class="small" style="margin-top:6px"></div></div>` : ""}
+    <div class="card"><h3>Comptes</h3>
+      <table class="fv" style="margin-top:6px"><thead><tr><th>Adresse</th><th>Nom</th>${pf ? "<th>Organisme</th>" : ""}<th>Rôle</th><th>Dernière connexion</th><th>État</th><th></th></tr></thead><tbody>
+      ${comptes.comptes.map((u) => `<tr><td>${esc(u.email)}</td><td>${esc(u.nom || "")}</td>${pf ? `<td>${esc(orgNom[u.organisme_id] || (u.organisme_id ? u.organisme_id : "Plateforme"))}</td>` : ""}
+        <td><select data-role="${u.id}" ${S.user && u.id === S.user.id ? "disabled" : ""}>${roles.map(([k, l]) => `<option value="${k}" ${u.role === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
+        <td class="small">${esc((u.derniere_connexion || "jamais").replace("T", " ").slice(0, 16))}</td>
+        <td>${u.actif ? `<span class="chip ok">actif</span>` : `<span class="chip bad">désactivé</span>`}</td>
+        <td style="white-space:nowrap">${S.user && u.id === S.user.id ? "" : `<button class="btn sm sec" data-u-actif="${u.id}" data-v="${u.actif ? 0 : 1}">${u.actif ? "Désactiver" : "Réactiver"}</button> <button class="btn sm sec" data-u-pw="${u.id}">Nouveau mot de passe</button>`}</td></tr>`).join("")}</tbody></table>
+      <h4 style="margin-top:14px">Ajouter un compte</h4>
+      <div class="row" style="margin-top:6px;flex-wrap:wrap"><input type="email" id="cpt-email" placeholder="adresse électronique"><input type="text" id="cpt-nom" placeholder="Nom (facultatif)">
+        ${pf ? `<select id="cpt-org">${orgs.map((o) => `<option value="${esc(o.id)}">${esc(o.nom)}</option>`).join("")}</select>` : ""}
+        <select id="cpt-role">${roles.map(([k, l]) => `<option value="${k}" ${k === "analyste" ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <input type="text" id="cpt-pw" placeholder="Mot de passe provisoire (12 caractères min.)" autocomplete="off">
+        <button class="btn sm sec" id="cpt-gen" style="flex:0;white-space:nowrap">Générer</button><button class="btn" id="cpt-add" style="flex:0;white-space:nowrap">Créer le compte</button></div>
+      <p class="hint">Transmettez le mot de passe provisoire par un autre canal que l'adresse ; l'utilisateur le change depuis le menu en haut à droite.</p>
+      <div id="cpt-out" class="small" style="margin-top:6px"></div></div>`;
+  const err = (sel, e) => ($(sel).innerHTML = `<div class="alert bad">${esc(e.message)}</div>`);
+  if (pf) {
+    $("#org-add").onclick = async () => {
+      try { await api("/api/organismes", { id: $("#org-id").value, nom: $("#org-nom").value, quota_ia: $("#org-quota").value ? +$("#org-quota").value : null }); toast("Organisme créé."); renderComptes(); }
+      catch (e) { err("#org-out", e); }
+    };
+    document.querySelectorAll("[data-org-actif]").forEach((b) => (b.onclick = async () => {
+      if (b.dataset.v === "0" && !confirm("Suspendre cet organisme ? Ses utilisateurs seront déconnectés.")) return;
+      await api(`/api/organismes/${b.dataset.orgActif}`, { actif: b.dataset.v === "1" }, "PATCH"); renderComptes();
+    }));
+    document.querySelectorAll("[data-quota]").forEach((i) => (i.onchange = async () => { await api(`/api/organismes/${i.dataset.quota}`, { quota_ia: i.value === "" ? null : +i.value }, "PATCH"); toast("Quota enregistré."); }));
+  }
+  const gen = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let p = ""; const r = crypto.getRandomValues(new Uint32Array(14)); r.forEach((x) => (p += a[x % a.length])); return p + "7Aa"; };
+  $("#cpt-gen").onclick = () => ($("#cpt-pw").value = gen());
+  $("#cpt-add").onclick = async () => {
+    try {
+      await api("/api/comptes", { email: $("#cpt-email").value, nom: $("#cpt-nom").value || null, role: $("#cpt-role").value, mot_de_passe: $("#cpt-pw").value, organisme_id: pf ? $("#cpt-org").value : null });
+      toast("Compte créé."); renderComptes();
+    } catch (e) { err("#cpt-out", e); }
+  };
+  document.querySelectorAll("[data-role]").forEach((s_) => (s_.onchange = async () => { try { await api(`/api/comptes/${s_.dataset.role}`, { role: s_.value }, "PATCH"); toast("Rôle modifié."); } catch (e) { toast(e.message); renderComptes(); } }));
+  document.querySelectorAll("[data-u-actif]").forEach((b) => (b.onclick = async () => { await api(`/api/comptes/${b.dataset.uActif}`, { actif: b.dataset.v === "1" }, "PATCH"); renderComptes(); }));
+  document.querySelectorAll("[data-u-pw]").forEach((b) => (b.onclick = async () => {
+    const pw = gen();
+    if (!confirm(`Attribuer le mot de passe provisoire suivant ?\n\n${pw}\n\nNotez-le avant de valider : il ne sera plus affiché.`)) return;
+    try { await api(`/api/comptes/${b.dataset.uPw}`, { mot_de_passe: pw }, "PATCH"); toast("Mot de passe modifié ; les sessions de ce compte sont fermées."); } catch (e) { toast(e.message); }
   }));
 }
 function importReport(r, fname) {

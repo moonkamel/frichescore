@@ -203,6 +203,38 @@ docker compose exec frichescore python -m app.maj --departements 59 62 --publier
 
 `FRICHESCORE_PLANIFICATEUR=0` désactive le planificateur intégré.
 
+## Mise en ligne : organismes et comptes
+
+Par défaut, FricheScore fonctionne **en local** pour un seul poste, sans connexion. Sur le serveur en ligne, activer
+`FRICHESCORE_AUTH=1` : chaque utilisateur se connecte (adresse et mot de passe) et appartient à un **organisme client**.
+
+- **Base commune**, partagée et mise à jour la nuit : friches Cartofriches, indicateurs communaux et de site, signaux
+  publics (cessations ICPE, PLU, BODACC des exploitants ICPE).
+- **Espace privé de chaque organisme**, jamais visible des autres : friches importées par CSV, saisies terrain,
+  portfolio, historique des scores, documents et extractions IA, notes IA, paramètres calibrés, calendrier des
+  financements, signaux issus de ses propres SIREN, statut « lu » des signaux, tâches de fond, quota IA.
+- **Rôles** : lecteur (consultation, exports), analyste (saisies, imports, portfolio, documents, IA), administrateur de
+  l'organisme (en plus : comptes, paramètres, calendrier), administrateur de la plateforme (organismes, mise à jour
+  nocturne, packs). L'administrateur de la plateforme voit la base commune, pas les données privées des clients.
+- Sécurité : mots de passe hachés (scrypt), 12 caractères minimum ; session de 12 h dans un cookie `HttpOnly`,
+  `SameSite=Lax`, réservé au HTTPS (`FRICHESCORE_COOKIE_SECURE=1`) ; blocage de 15 min après 5 échecs de connexion ;
+  changement de mot de passe ou désactivation = sessions fermées. Les données de démonstration ne sont pas chargées.
+
+Premiers comptes (sur le serveur) :
+
+```bash
+docker compose exec frichescore python -m app.auth creer-admin --email vous@exemple.fr
+```
+
+```bash
+docker compose exec frichescore python -m app.auth creer-organisme --id epf-hdf --nom "EPF Hauts-de-France" --admin-email chef@epf.fr
+```
+
+Ensuite, tout se gère depuis l'onglet **Organismes** (plateforme) ou **Comptes** (administrateur d'un organisme).
+Une base locale existante est migrée automatiquement : ses données deviennent celles de l'organisme « local ».
+Reste à faire avant une mise en production : base PostgreSQL (SQLite convient pour quelques organismes),
+sauvegardes, HTTPS par un proxy inverse, contrat de sous-traitance RGPD avec chaque client.
+
 ## Extraction de documents par l'IA (optionnelle)
 
 Dans la fiche d'une friche, **Documents — analyse par IA** : déposez un PDF (étude de sol, diagnostic, acte, courrier

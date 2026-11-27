@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import db
+from . import db, tenant
 from .jobs import running, start_job
 from .scoring.record import Record
 
@@ -120,6 +120,12 @@ def etat() -> dict:
 
 # ------------------------------------------------------------------ instantané des scores
 def _instantane() -> dict[str, dict]:
+    from . import tenant
+    with tenant.PARAMS.use(tenant.org()):
+        return _instantane_()
+
+
+def _instantane_() -> dict[str, dict]:
     from .service import _w
     from .scoring.stress import base_ranking
     sites = {k: v for k, v in db.load_sites({"type": "tout"}).items() if not str(v.get("_origine") or "").startswith("demo")}
@@ -165,6 +171,14 @@ def executer(progress=None, declencheur: str = "manuel", reglages_: dict | None 
             nouveaux += b["nouveaux"]
             res["bodacc"] = {k: b[k] for k in ("sirens", "annonces", "nouveaux")}
             res["erreurs"] = res.get("erreurs", []) + b["erreurs"]
+            if tenant.org() is None:  # mise à jour nocturne : SIREN propriétaires saisis par chaque organisme
+                for o in db.org_list():
+                    if not o["actif"]:
+                        continue
+                    with tenant.as_org(o["id"]):
+                        bp = SG.scan_bodacc(db.load_sites({"type": "tout"}), None, saisies_seulement=True)
+                    nouveaux += bp["nouveaux"]
+                    res["bodacc"]["sirens"] += bp["sirens"]
         res["signaux_nouveaux"] = nouveaux
         if r.get("publier_packs") and r["mode"] == "apis":
             if progress:
@@ -313,7 +327,7 @@ def importer_pack(raw: bytes, dry_run: bool = False) -> dict:
     rep["friches_ignorees"] = rep["friches_ignorees"][:30]
     if not dry_run:
         for rec, origine in friches:
-            db.upsert_friche(rec, origine)
+            db.upsert_friche(rec, origine, org=None)  # un pack alimente la base commune
         for code, rec in communes:
             base = db.get_commune(code)
             db.upsert_commune(code, base.merged_with(rec) if base else rec)

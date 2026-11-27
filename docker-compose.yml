@@ -18,6 +18,10 @@ services:
       - FRICHESCORE_IA_QUOTA_MOIS=${FRICHESCORE_IA_QUOTA_MOIS:-200}
       # Heure locale (planification de la mise à jour nocturne, dates du journal)
       - TZ=${TZ:-Europe/Paris}
+      # Mode en ligne (plusieurs organismes clients, connexion obligatoire) : mettre 1 sur le serveur.
+      - FRICHESCORE_AUTH=${FRICHESCORE_AUTH:-0}
+      # Cookie de session réservé au HTTPS (laisser 1 en production derrière HTTPS)
+      - FRICHESCORE_COOKIE_SECURE=${FRICHESCORE_COOKIE_SECURE:-1}
       # Mettre 0 pour désactiver le planificateur de mise à jour nocturne
       - FRICHESCORE_PLANIFICATEUR=${FRICHESCORE_PLANIFICATEUR:-1}
     ports:

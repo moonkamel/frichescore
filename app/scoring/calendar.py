@@ -29,7 +29,11 @@ def path() -> Path:
     if env:
         return Path(env)
     from ..db import DB_PATH  # import local : évite une dépendance circulaire
-    return DB_PATH.parent / "funding_windows.json"
+    from .. import tenant
+    o = tenant.org()
+    if o in (None, tenant.LOCAL):
+        return DB_PATH.parent / "funding_windows.json"
+    return DB_PATH.parent / "calendriers" / f"{o}.json"  # un calendrier par organisme
 
 
 def load() -> dict:
