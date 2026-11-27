@@ -69,3 +69,16 @@ def test_page_sans_cache():
     with TestClient(app) as c:
         r = c.get("/")
         assert "app.js?v=" in r.text and "style.css?v=" in r.text and r.headers["cache-control"] == "no-cache"
+
+
+def test_cache_refait_si_la_regle_change(monkeypatch, tmp_path):
+    monkeypatch.setattr(T, "cache_dir", lambda: tmp_path)
+    calls = []
+    monkeypatch.setattr(T, "resolve_resource", lambda n: calls.append(n) or {"url": "https://x/f.csv", "titre": "f.csv", "date": "2026"})
+    monkeypatch.setattr(T, "_download", lambda url, path, params=None: path.write_text("a;b\n1;2\n"))
+    T.cached_file("bpe")
+    T.cached_file("bpe")
+    assert calls == ["bpe"]  # cache réutilisé
+    monkeypatch.setitem(T.DATASETS["bpe"], "organisation", "autre-regle")
+    T.cached_file("bpe")
+    assert calls == ["bpe", "bpe"]  # règle modifiée : nouvelle résolution

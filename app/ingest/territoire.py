@@ -208,12 +208,18 @@ def _download(url: str, dest: Path, params: dict | None = None) -> None:
     tmp.replace(dest)
 
 
+def _regle(name: str) -> str:
+    """Empreinte de la règle de choix du fichier : si elle change (nouvel identifiant, filtre), le cache est refait."""
+    import hashlib
+    return hashlib.sha1(json.dumps(DATASETS.get(name, {}), sort_keys=True).encode()).hexdigest()[:12]
+
+
 def cached_file(name: str, refresh: bool = False) -> tuple[Path, dict]:
     """Télécharge (si nécessaire) le fichier national et renvoie (chemin, métadonnées)."""
     d = cache_dir()
     meta_p = d / f"{name}.json"
     meta = json.loads(meta_p.read_text(encoding="utf-8")) if meta_p.exists() else None
-    fresh = (meta and meta.get("version") == CACHE_VERSION
+    fresh = (meta and meta.get("version") == CACHE_VERSION and meta.get("regle") == _regle(name)
              and (time.time() - meta.get("telecharge_le_ts", 0)) < CACHE_MAX_AGE_DAYS * 86400)
     path = d / (meta or {}).get("fichier", f"{name}.bin")
     if meta and fresh and path.exists() and not refresh:
@@ -244,7 +250,7 @@ def cached_file(name: str, refresh: bool = False) -> tuple[Path, dict]:
     else:
         _download(url, path, params)
     meta = {**info, "fichier": path.name, "telecharge_le": date.today().isoformat(), "telecharge_le_ts": time.time(),
-            "version": CACHE_VERSION}
+            "version": CACHE_VERSION, "regle": _regle(name)}
     meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return path, meta
 
