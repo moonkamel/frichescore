@@ -690,7 +690,13 @@ for _r in app.routes:
 # ------------------------------------------------------------------- front
 @app.get("/")
 def index():
-    return FileResponse(FRONT / "index.html")
+    """Page d'accueil ; les fichiers JS/CSS portent leur date de modification pour que le navigateur
+    recharge toujours la version installée (pas de vieux app.js en cache après une mise à jour)."""
+    html = (FRONT / "index.html").read_text(encoding="utf-8")
+    for f in ("app.js", "style.css"):
+        v = int((FRONT / f).stat().st_mtime)
+        html = html.replace(f"/static/{f}", f"/static/{f}?v={v}")
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=FRONT), name="static")

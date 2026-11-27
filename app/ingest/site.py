@@ -32,6 +32,9 @@ SNCF_EXPORT = os.environ.get("SNCF_GARES_URL",
                              "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/{ds}/exports/csv")
 SNCF_DATASETS = [d.strip() for d in os.environ.get("SNCF_GARES_DATASETS", "gares-de-voyageurs,referentiel-gares-voyageurs,liste-des-gares").split(",")]
 OVERPASS_URL = os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter")
+# Serveurs Overpass publics de secours (le serveur principal renvoie parfois 502/504 en cas de surcharge)
+OVERPASS_SECOURS = [u for u in os.environ.get("OVERPASS_SECOURS", "https://overpass.private.coffee/api/interpreter,"
+                                              "https://overpass.kumi.systems/api/interpreter").split(",") if u]
 PVGIS_URL = os.environ.get("PVGIS_URL", "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc")
 GEORISQUES_URL = os.environ.get("GEORISQUES_URL", "https://www.georisques.gouv.fr/api/v1")
 APICARTO_URL = os.environ.get("APICARTO_URL", "https://apicarto.ign.fr/api")
@@ -135,13 +138,22 @@ def fetch_stops(bbox: tuple[float, float, float, float]) -> list[dict]:
     """Arrêts de transport collectif dans une emprise (sud, ouest, nord, est)."""
     s, w, n, e = bbox
     q = OVERPASS_QUERY.format(s=s, w=w, n=n, e=e)
+    r, essais = None, []
     with K._client(120) as c:
-        try:
-            r = c.post(OVERPASS_URL, data={"data": q})
-        except K.httpx.HTTPError as ex:
-            raise K.ConnectorError(f"Overpass injoignable ({type(ex).__name__}) : {str(ex)[:120]}", OVERPASS_URL)
-    if r.status_code == 429:
-        raise K.ConnectorError("Overpass : trop de requêtes (HTTP 429), réessayer dans une minute", OVERPASS_URL, 429)
+        for url in [OVERPASS_URL, *OVERPASS_SECOURS]:
+            try:
+                r = c.post(url, data={"data": q})
+            except K.httpx.HTTPError as ex:
+                essais.append(f"{url.split('/')[2]} injoignable ({type(ex).__name__})")
+                r = None
+                continue
+            if r.status_code in (429, 502, 503, 504):  # surcharge : serveur suivant
+                essais.append(f"{url.split('/')[2]} HTTP {r.status_code}")
+                continue
+            break
+    if r is None or r.status_code in (429, 502, 503, 504):
+        raise K.ConnectorError("Overpass : serveurs surchargés (" + " ; ".join(essais) + "), réessayer plus tard",
+                               OVERPASS_URL, r.status_code if r is not None else None)
     if r.status_code >= 400:
         raise K.ConnectorError(f"Overpass : HTTP {r.status_code}", OVERPASS_URL, r.status_code, r.text[:300])
     try:

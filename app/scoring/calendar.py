@@ -40,7 +40,10 @@ def load() -> dict:
     p = path()
     if not p.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(DEFAULT_FILE, p)
+        if DEFAULT_FILE.exists():
+            shutil.copyfile(DEFAULT_FILE, p)
+        else:  # modèle absent de l'installation : calendrier vide plutôt qu'une erreur
+            return {"fenetres": [], "echeances_reglementaires": [], "types": dict(DEFAULT_TYPES)}
     data = json.loads(p.read_text(encoding="utf-8"))
     data.setdefault("types", dict(DEFAULT_TYPES))
     for w in data.get("fenetres", []):

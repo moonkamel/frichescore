@@ -38,7 +38,9 @@ DATASETS = {
                    "prefer": [r"ensemble des communes", r"liste.*communes"], "avoid": [r"reclass", r"d[ée]class", r"dictionnaire"]},
     "lovac": {"slug": "logements-vacants-du-parc-prive-par-commune-departement-region-france", "label": "LOVAC (logements vacants)",
               "prefer": [r"commune"], "avoid": [r"departement", r"region", r"france", r"epci", r"schema", r"dictionnaire", r"documentation"]},
-    "bpe": {"slug": os.environ.get("BPE_DATASET", "base-permanente-des-equipements-1"), "label": "BPE (équipements, INSEE)",
+    "bpe": {"slug": os.environ.get("BPE_DATASET", "base-permanente-des-equipements-2"), "label": "BPE (équipements, INSEE)",
+            "slugs_secours": ["base-permanente-des-equipements-1", "base-permanente-des-equipements"],
+            "recherche": "base permanente des equipements",
             "prefer": [r"commune", r"denombrement", r"ensemble"],
             "avoid": [r"geolocalis", r"\bxy\b", r"dictionnaire", r"documentation", r"metadonn", r"variables", r"iris", r"departement",
                       r"region", r"evolution"]},
@@ -100,8 +102,28 @@ def communes_du_departement(dep: str) -> list[str]:
 def resolve_resource(name: str) -> dict:
     """Ressource la plus pertinente d'un jeu de données data.gouv.fr (adresse, titre, date)."""
     cfg = DATASETS[name]
+    data = None
+    api = DATAGOUV_API.rstrip('/')
     with K._client(30) as c:
-        data, _f, _s = K._get(c, f"{DATAGOUV_API.rstrip('/')}/datasets/{cfg['slug']}/")
+        # le jeu de données change parfois d'identifiant : adresses de secours, puis recherche par titre
+        last = None
+        for slug in [cfg["slug"], *cfg.get("slugs_secours", [])]:
+            try:
+                data, _f, _s = K._get(c, f"{api}/datasets/{slug}/")
+                break
+            except K.ConnectorError as e:
+                last = e
+                if e.status != 404:
+                    raise
+        if data is None and cfg.get("recherche"):
+            found, _f, _s = K._get(c, f"{api}/datasets/", {"q": cfg["recherche"], "page_size": 10})
+            want = _norm(cfg["recherche"])
+            for d in (found.get("data") or []) if isinstance(found, dict) else []:
+                if want in _norm(d.get("title", "")) and d.get("resources"):
+                    data = d
+                    break
+        if data is None:
+            raise last or K.ConnectorError(f"jeu de données « {cfg['slug']} » introuvable")
     res = [r for r in (data.get("resources") or []) if r.get("url")]
     if not res:
         raise K.ConnectorError(f"aucune ressource dans le jeu de données « {cfg['slug']} »")

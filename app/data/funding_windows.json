@@ -1,0 +1,232 @@
+{
+  "_avertissement": "Calendrier de travail ÉDITABLE. Les échéances réglementaires ZAN sont issues des textes. Les fenêtres de financement livrées par défaut sont des EXEMPLES construits sur le rythme des éditions passées (statut « à vérifier ») : remplacez-les par les calendriers officiels et passez-les au statut « vérifié ».",
+  "echeances_reglementaires": [
+    {
+      "id": "zan_sraddet",
+      "nom": "Intégration de la trajectoire ZAN dans les SRADDET",
+      "date": "2024-11-22",
+      "source": "Loi n° 2023-630 du 20 juillet 2023",
+      "confiance": "eleve",
+      "portee": "Région",
+      "statut_verification": "verifie"
+    },
+    {
+      "id": "zan_scot",
+      "nom": "Intégration des objectifs ZAN dans les SCoT",
+      "date": "2027-02-22",
+      "source": "Loi n° 2023-630 du 20 juillet 2023",
+      "confiance": "eleve",
+      "portee": "SCoT",
+      "effet": "Les SCoT devront territorialiser la réduction de consommation d'espaces : le recyclage des friches devient la variable d'ajustement prioritaire.",
+      "statut_verification": "verifie"
+    },
+    {
+      "id": "zan_plu",
+      "nom": "Intégration des objectifs ZAN dans les PLU(i) et cartes communales",
+      "date": "2028-02-22",
+      "source": "Loi n° 2023-630 du 20 juillet 2023",
+      "confiance": "eleve",
+      "portee": "PLU(i)",
+      "effet": "Les ouvertures à l'urbanisation en extension seront plus difficiles à justifier : les friches mobilisables avant cette date gagnent en valeur stratégique.",
+      "statut_verification": "verifie"
+    },
+    {
+      "id": "zan_decennie",
+      "nom": "Fin de la première décennie ZAN (réduction de 50 % de la consommation d'ENAF 2021-2031)",
+      "date": "2031-08-22",
+      "source": "Loi n° 2021-1104 du 22 août 2021 (Climat et résilience), art. 191",
+      "confiance": "eleve",
+      "portee": "National",
+      "statut_verification": "verifie"
+    }
+  ],
+  "fenetres": [
+    {
+      "id": "fv_recyclage_2027",
+      "nom": "Fonds Vert — recyclage foncier (édition 2027, exemple)",
+      "financeur": "État (préfectures de département)",
+      "ouverture": "2027-01-15",
+      "cloture": "2027-04-30",
+      "dispositif": "fonds_vert_recyclage",
+      "usages": [
+        "logement",
+        "activite",
+        "tertiaire",
+        "equipement"
+      ],
+      "conditions": {
+        "bilan_deficitaire": true
+      },
+      "maturite_requise": "programme et pré-bilan d'opération établis",
+      "date_verification": null,
+      "type": "subvention_etat",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "fv_renaturation_2027",
+      "nom": "Fonds Vert — renaturation des villes (édition 2027, exemple)",
+      "financeur": "État",
+      "ouverture": "2027-01-15",
+      "cloture": "2027-04-30",
+      "dispositif": "fonds_vert_renaturation",
+      "usages": [
+        "renaturation"
+      ],
+      "conditions": {},
+      "maturite_requise": "esquisse du projet de renaturation",
+      "date_verification": null,
+      "type": "subvention_etat",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "ademe_friches_2027",
+      "nom": "ADEME — reconversion des friches polluées (appel à projets 2027, exemple)",
+      "financeur": "ADEME",
+      "ouverture": "2027-02-01",
+      "cloture": "2027-05-31",
+      "dispositif": "ademe_friches_polluees",
+      "usages": [
+        "logement",
+        "activite",
+        "tertiaire",
+        "equipement",
+        "renaturation"
+      ],
+      "conditions": {
+        "pollue": true
+      },
+      "maturite_requise": "diagnostic de pollution et plan de gestion",
+      "date_verification": null,
+      "type": "appel_a_projets",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "f2030_sce_2027",
+      "nom": "France 2030 — sites clés en main (nouvelle vague, exemple)",
+      "financeur": "État / Banque des Territoires",
+      "ouverture": "2027-03-01",
+      "cloture": "2027-06-30",
+      "dispositif": "sites_cles_en_main",
+      "usages": [
+        "activite"
+      ],
+      "conditions": {
+        "surface_min_ha": 10
+      },
+      "maturite_requise": "maîtrise foncière engagée et études environnementales lancées",
+      "date_verification": null,
+      "type": "appel_a_projets",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "cre_pv_2027_1",
+      "nom": "CRE — appel d'offres PV au sol, période de candidature (exemple)",
+      "financeur": "CRE",
+      "ouverture": "2027-02-01",
+      "cloture": "2027-03-01",
+      "dispositif": "cre_terrains_degrades",
+      "usages": [
+        "photovoltaique"
+      ],
+      "conditions": {},
+      "maturite_requise": "autorisation d'urbanisme obtenue",
+      "date_verification": null,
+      "type": "appel_offres_cre",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "cre_pv_2027_2",
+      "nom": "CRE — appel d'offres PV au sol, période de candidature (exemple)",
+      "financeur": "CRE",
+      "ouverture": "2027-06-01",
+      "cloture": "2027-07-01",
+      "dispositif": "cre_terrains_degrades",
+      "usages": [
+        "photovoltaique"
+      ],
+      "conditions": {},
+      "maturite_requise": "autorisation d'urbanisme obtenue",
+      "date_verification": null,
+      "type": "appel_offres_cre",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "region_friches_2027",
+      "nom": "Dispositif régional friches (appel à projets, exemple)",
+      "financeur": "Région",
+      "ouverture": "2026-12-01",
+      "cloture": "2027-03-15",
+      "dispositif": "fonds_regional",
+      "usages": [
+        "logement",
+        "activite",
+        "tertiaire",
+        "equipement",
+        "renaturation"
+      ],
+      "conditions": {},
+      "maturite_requise": "délibération de la collectivité porteuse",
+      "date_verification": null,
+      "type": "regional",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "fv_recyclage_2028",
+      "nom": "Fonds Vert — recyclage foncier (édition 2028, exemple)",
+      "financeur": "État (préfectures de département)",
+      "ouverture": "2028-01-15",
+      "cloture": "2028-04-30",
+      "dispositif": "fonds_vert_recyclage",
+      "usages": [
+        "logement",
+        "activite",
+        "tertiaire",
+        "equipement"
+      ],
+      "conditions": {
+        "bilan_deficitaire": true
+      },
+      "maturite_requise": "programme et pré-bilan d'opération établis",
+      "date_verification": null,
+      "type": "subvention_etat",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    },
+    {
+      "id": "ademe_friches_2028",
+      "nom": "ADEME — reconversion des friches polluées (appel à projets 2028, exemple)",
+      "financeur": "ADEME",
+      "ouverture": "2028-02-01",
+      "cloture": "2028-05-31",
+      "dispositif": "ademe_friches_polluees",
+      "usages": [
+        "logement",
+        "activite",
+        "tertiaire",
+        "equipement",
+        "renaturation"
+      ],
+      "conditions": {
+        "pollue": true
+      },
+      "maturite_requise": "diagnostic de pollution et plan de gestion",
+      "date_verification": null,
+      "type": "appel_a_projets",
+      "statut_verification": "a_verifier",
+      "source_url": null
+    }
+  ],
+  "types": {
+    "subvention_etat": "Subvention de l'État",
+    "appel_a_projets": "Appel à projets national",
+    "appel_offres_cre": "Appel d'offres CRE",
+    "regional": "Dispositif régional"
+  }
+}
