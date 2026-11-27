@@ -1373,8 +1373,9 @@ async function renderDonnees() {
     const bo = $("#ct-src").value === "bodacc";
     $("#ct-url").value = urls[$("#ct-src").value] || "";
     $("#ct-insee-lbl").textContent = bo ? "SIREN à tester (9 chiffres)" : "Code INSEE de test";
-    if (bo && $("#ct-insee").value.length === 5) $("#ct-insee").value = "";
-    if (!bo && !$("#ct-insee").value) $("#ct-insee").value = "59350";
+    const v = $("#ct-insee").value.replace(/\s/g, "");
+    if (bo && v.length === 5) $("#ct-insee").value = "";
+    if (!bo && v.length !== 5) $("#ct-insee").value = "59350";  // un SIREN laissé dans le champ n'est pas un code commune
   };
   $("#ct-src").onchange = setUrl; setUrl();
   $("#ct-go").onclick = async () => {

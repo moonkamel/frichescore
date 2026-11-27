@@ -19,18 +19,17 @@ def test_bpe_identifiant_de_secours(monkeypatch):
 
     def handler(req):
         seen.append(req.url.path)
-        if req.url.path.endswith("/datasets/base-permanente-des-equipements-2/"):
-            return httpx.Response(404, json={"message": "not found"})
-        if req.url.path.endswith("/datasets/base-permanente-des-equipements-1/"):
-            return httpx.Response(404, json={"message": "not found"})
-        if req.url.path.endswith("/datasets/base-permanente-des-equipements/"):
-            return httpx.Response(404, json={"message": "not found"})
         if req.url.path.endswith("/datasets/"):  # recherche par titre
             return httpx.Response(200, json={"data": [
-                {"title": "Autre jeu", "resources": [{"url": "x", "title": "x.csv"}]},
-                {"title": "Base permanente des équipements (BPE)", "resources": [
+                {"title": "Base permanente des équipements (copie régionale)", "organization": {"name": "Région Île-de-France"},
+                 "resources": [{"url": "https://idf/bpe23.csv", "title": "bpe23-nettoye.csv", "format": "csv"}]},
+                {"title": "Base permanente des équipements (BPE)",
+                 "organization": {"name": "Institut National de la Statistique et des Etudes Economiques (Insee)"},
+                 "resources": [
                     {"url": "https://x/bpe_commune.csv", "title": "BPE ensemble des communes.csv", "format": "csv"},
                     {"url": "https://x/bpe_xy.csv", "title": "BPE géolocalisée xy.csv", "format": "csv"}]}]})
+        if "/datasets/" in req.url.path:
+            return httpx.Response(404, json={"message": "not found"})
         return httpx.Response(500)
     monkeypatch.setattr(K, "TRANSPORT", httpx.MockTransport(handler))
     monkeypatch.setitem(T.DATASETS["bpe"], "slug", "base-permanente-des-equipements-2")

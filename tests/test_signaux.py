@@ -74,7 +74,7 @@ def c(monkeypatch):
 def test_bodacc_signaux_sans_nom_et_dedoublonnes(c):
     rep = SG.scan_bodacc(db.load_sites({"type": "tout"}))
     assert rep["sirens"] == 1 and rep["nouveaux"] == 2  # liquidation + vente ; modification et autre SIREN ignorées
-    assert "registre" in c.seen[0] and "552100554" in c.seen[0]
+    assert "552100554" in c.seen[0] and "552+100+554" in c.seen[0].replace("%20", "+")
     rows = db.signals_list("sig-1")
     assert {r["type"] for r in rows} == {"bodacc_procedure_collective", "bodacc_vente"}
     liq = next(r for r in rows if r["type"] == "bodacc_procedure_collective")

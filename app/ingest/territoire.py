@@ -39,7 +39,9 @@ DATASETS = {
     "lovac": {"slug": "logements-vacants-du-parc-prive-par-commune-departement-region-france", "label": "LOVAC (logements vacants)",
               "prefer": [r"commune"], "avoid": [r"departement", r"region", r"france", r"epci", r"schema", r"dictionnaire", r"documentation"]},
     "bpe": {"slug": os.environ.get("BPE_DATASET", "base-permanente-des-equipements-2"), "label": "BPE (équipements, INSEE)",
-            "slugs_secours": ["base-permanente-des-equipements-1", "base-permanente-des-equipements"],
+            # identifiant stable du jeu INSEE sur data.gouv.fr, puis anciens noms
+            "slugs_secours": ["548acaf2c751df1eac4120e7", "base-permanente-des-equipements", "base-permanente-des-equipements-1"],
+            "organisation": "insee",
             "recherche": "base permanente des equipements",
             "prefer": [r"commune", r"denombrement", r"ensemble"],
             "avoid": [r"geolocalis", r"\bxy\b", r"dictionnaire", r"documentation", r"metadonn", r"variables", r"iris", r"departement",
@@ -119,6 +121,9 @@ def resolve_resource(name: str) -> dict:
             found, _f, _s = K._get(c, f"{api}/datasets/", {"q": cfg["recherche"], "page_size": 10})
             want = _norm(cfg["recherche"])
             for d in (found.get("data") or []) if isinstance(found, dict) else []:
+                org = _norm(" ".join(str((d.get("organization") or {}).get(k) or "") for k in ("name", "acronym", "slug")))
+                if cfg.get("organisation") and cfg["organisation"] not in org and "statistique" not in org:
+                    continue  # copies régionales ou réutilisations : on ne garde que le producteur officiel
                 if want in _norm(d.get("title", "")) and d.get("resources"):
                     data = d
                     break
@@ -817,6 +822,14 @@ def distance_km(lat1, lon1, lat2, lon2) -> float:
 
 
 def test_communes(code: str, refresh: bool = False) -> dict:
+    code = (code or "").strip().upper()
+    if not re.match(r"^(\d{5}|2[AB]\d{3})$", code):
+        return {"source": "communes", "ok": False, "code_insee": code, "duree_ms": 0, "resultat": None, "detail": {},
+                "erreur": f"« {code} » n'est pas un code INSEE de commune (5 caractères, ex. 59350)"}
+    return _test_communes(code, refresh)
+
+
+def _test_communes(code: str, refresh: bool = False) -> dict:
     """Diagnostic complet pour une commune : chaque source, son adresse, la détection des colonnes et la valeur obtenue."""
     out = {}
     t0 = time.monotonic()

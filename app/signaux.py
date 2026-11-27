@@ -53,11 +53,7 @@ def _nature(rec: dict) -> str:
 def fetch_bodacc(siren: str, depuis: date | None = None) -> list[dict]:
     """Annonces BODACC d'une entreprise (procédures collectives, ventes et cessions, radiations), les plus récentes d'abord."""
     depuis = depuis or (date.today() - timedelta(days=30 * FENETRE_MOIS))
-    params = {"where": f'registre like "{siren}" and dateparution >= date\'{depuis.isoformat()}\'',
-              "order_by": "dateparution desc", "limit": 50}
-    with K._client(60) as c:
-        data, _full, _st = K._get(c, BODACC_URL, params)
-    rows = data.get("results", []) if isinstance(data, dict) else []
+    rows = _bodacc_rows(siren, depuis)
     out = []
     for r in rows:
         if not isinstance(r, dict):
@@ -72,6 +68,20 @@ def fetch_bodacc(siren: str, depuis: date | None = None) -> list[dict]:
                     "nature": _nature(r) or str(r.get("familleavis_lib") or ""), "tribunal": r.get("tribunal"),
                     "departement": r.get("numerodepartement")})
     return out
+
+
+def _bodacc_query(siren: str, depuis: date) -> dict:
+    """Le champ « registre » contient le SIREN avec ou sans espaces selon les annonces : recherche plein texte
+    sur les deux écritures, puis vérification stricte du SIREN sur chaque annonce."""
+    spaced = f"{siren[:3]} {siren[3:6]} {siren[6:]}"
+    return {"where": f'("{siren}" or "{spaced}") and dateparution >= date\'{depuis.isoformat()}\'',
+            "order_by": "dateparution desc", "limit": 100}
+
+
+def _bodacc_rows(siren: str, depuis: date) -> list[dict]:
+    with K._client(60) as c:
+        data, _full, _st = K._get(c, BODACC_URL, _bodacc_query(siren, depuis))
+    return data.get("results", []) if isinstance(data, dict) else []
 
 
 TITRES = {
@@ -192,10 +202,16 @@ def test_bodacc(siren: str) -> dict:
     import time
     t0 = time.time()
     try:
-        a = fetch_bodacc(siren, date.today() - timedelta(days=365 * 10))
+        depuis = date.today() - timedelta(days=365 * 10)
+        brutes = _bodacc_rows(siren, depuis)
+        a = fetch_bodacc(siren, depuis)
+        # diagnostic sans nom de personne : familles d'annonces et forme du champ registre
+        apercu = [{"date": r.get("dateparution"), "famille": r.get("familleavis_lib") or r.get("familleavis"),
+                   "registre": r.get("registre")} for r in brutes[:10] if isinstance(r, dict)]
         return {"ok": True, "source": "BODACC (DILA)", "url": BODACC_URL, "siren": siren, "annonces": a[:20],
-                "duree_ms": round((time.time() - t0) * 1000),
-                "resultat": {"annonces_retenues_10_ans": len(a), "annonces": a[:20]}}
+                "duree_ms": round((time.time() - t0) * 1000), "requete": _bodacc_query(siren, depuis),
+                "resultat": {"annonces_brutes": len(brutes), "annonces_retenues_10_ans": len(a), "annonces": a[:20],
+                             "apercu_brut": apercu}}
     except K.ConnectorError as e:
         return {"ok": False, "source": "BODACC (DILA)", "url": BODACC_URL, "erreur": e.message,
                 "duree_ms": round((time.time() - t0) * 1000)}
