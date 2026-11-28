@@ -1685,6 +1685,11 @@ async function renderComptes() {
       if (b.dataset.v === "0" && !confirm("Suspendre cet organisme ? Ses utilisateurs seront déconnectés.")) return;
       await api(`/api/organismes/${b.dataset.orgActif}`, { actif: b.dataset.v === "1" }, "PATCH"); renderComptes();
     }));
+    api("/api/demandes").then((d) => {
+      const box = document.createElement("div"); box.className = "card";
+      box.innerHTML = `<h3>Demandes de démonstration (page publique)</h3>${d.demandes.length ? `<table class="fv" style="margin-top:6px"><thead><tr><th>Date</th><th>Nom</th><th>Adresse</th><th>Organisme</th><th>Profil</th><th>Territoire</th><th>Besoin</th></tr></thead><tbody>${d.demandes.map((x) => `<tr><td class="small">${esc((x.cree_le || "").replace("T", " ").slice(0, 16))}</td><td>${esc(x.nom)}</td><td><a href="mailto:${esc(x.email)}">${esc(x.email)}</a></td><td>${esc(x.organisme)}</td><td>${esc(x.profil || "")}</td><td>${esc(x.territoire || "")}</td><td class="small">${esc(x.message || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="small muted">Aucune demande pour l'instant.</p>`}`;
+      $("#main").appendChild(box);
+    }).catch(() => {});
     document.querySelectorAll("[data-quota]").forEach((i) => (i.onchange = async () => { await api(`/api/organismes/${i.dataset.quota}`, { quota_ia: i.value === "" ? null : +i.value }, "PATCH"); toast("Quota enregistré."); }));
   }
   const gen = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let p = ""; const r = crypto.getRandomValues(new Uint32Array(14)); r.forEach((x) => (p += a[x % a.length])); return p + "7Aa"; };

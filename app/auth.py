@@ -14,13 +14,15 @@ from . import db, tenant
 
 COOKIE = "fs_session"
 SESSION_HEURES = int(os.environ.get("FRICHESCORE_SESSION_HEURES", "12"))
-OUVERT = {("POST", "/api/auth/connexion"), ("GET", "/api/auth/moi"), ("POST", "/api/auth/deconnexion")}
+OUVERT = {("POST", "/api/auth/connexion"), ("GET", "/api/auth/moi"), ("POST", "/api/auth/deconnexion"),
+          ("POST", "/api/contact")}
 
 # Rôle minimal par route (méthode, motif). Tout le reste : lecteur.
 _R = [
     ("admin_plateforme", "PUT", r"/api/maj"), ("admin_plateforme", "POST", r"/api/maj/lancer"),
     ("admin_plateforme", "GET", r"/api/maj"), ("admin_plateforme", "*", r"/api/packs.*"),
     ("admin_plateforme", "POST", r"/api/demo/reset"), ("admin_plateforme", "*", r"/api/organismes.*"),
+    ("admin_plateforme", "GET", r"/api/demandes"),
     ("admin", "PUT", r"/api/parametres"), ("admin", "POST", r"/api/parametres/(reset|import)"),
     ("admin", "PUT", r"/api/calendrier"), ("admin", "POST", r"/api/calendrier/reset"), ("admin", "*", r"/api/comptes.*"),
     ("analyste", "PUT", r"/api/portfolio/.+"), ("analyste", "DELETE", r"/api/portfolio/.+"),

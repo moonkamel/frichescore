@@ -590,6 +590,43 @@ def signaux_search():
     return _start_job(service.signaux_rechercher, "Signaux : annonces BODACC")
 
 
+# ------------------------------------------------------- demandes de démonstration (page publique)
+class ContactReq(BaseModel):
+    nom: str = Field(max_length=120)
+    email: str = Field(max_length=200)
+    organisme: str = Field(max_length=200)
+    profil: str | None = Field(None, max_length=80)
+    territoire: str | None = Field(None, max_length=300)
+    message: str | None = Field(None, max_length=3000)
+    site_web: str | None = None  # champ piège invisible : rempli par les robots
+
+
+_CONTACTS: dict[str, list[float]] = {}
+
+
+@app.post("/api/contact")
+def contact(r: ContactReq, request: Request):
+    import re as _re
+    import time as _t
+    if r.site_web:
+        return {"ok": True}  # robot : on ne dit rien
+    ip = request.client.host if request.client else "?"
+    now_ = _t.time()
+    _CONTACTS[ip] = [x for x in _CONTACTS.get(ip, []) if now_ - x < 3600]
+    if len(_CONTACTS[ip]) >= 5:
+        raise HTTPException(429, "trop de demandes : réessayez plus tard")
+    if not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", r.email.strip()) or not r.nom.strip() or not r.organisme.strip():
+        raise HTTPException(422, "nom, adresse électronique valide et organisme requis")
+    _CONTACTS[ip].append(now_)
+    db.demande_add({k: (v.strip() if isinstance(v, str) else v) for k, v in r.model_dump().items() if k != "site_web"})
+    return {"ok": True}
+
+
+@app.get("/api/demandes")
+def demandes():
+    return {"demandes": db.demande_list()}
+
+
 # ------------------------------------------------------- mise à jour automatique et packs
 @app.get("/api/maj")
 def maj_get():
@@ -688,9 +725,11 @@ for _r in app.routes:
 
 
 # ------------------------------------------------------------------- front
-@app.get("/")
-def index():
-    """Page d'accueil ; les fichiers JS/CSS portent leur date de modification pour que le navigateur
+SITE = Path(__file__).resolve().parent.parent / "site"
+
+
+def _app_page() -> Response:
+    """Application ; les fichiers JS/CSS portent leur date de modification pour que le navigateur
     recharge toujours la version installée (pas de vieux app.js en cache après une mise à jour)."""
     html = (FRONT / "index.html").read_text(encoding="utf-8")
     for f in ("app.js", "style.css"):
@@ -699,4 +738,50 @@ def index():
     return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
+def _site_url(request: Request) -> str:
+    import os
+    return (os.environ.get("FRICHESCORE_SITE_URL") or str(request.base_url)).rstrip("/")
+
+
+def _site_page(name: str, request: Request) -> Response:
+    html = (SITE / name).read_text(encoding="utf-8").replace("{{SITE_URL}}", _site_url(request))
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/")
+def index(request: Request):
+    """En ligne : page de présentation publique (l'application est sous /app). En local : l'application."""
+    return _site_page("index.html", request) if tenant.auth_enabled() else _app_page()
+
+
+@app.get("/app")
+def app_page():
+    return _app_page()
+
+
+@app.get("/presentation")
+def presentation(request: Request):
+    return _site_page("index.html", request)
+
+
+@app.get("/mentions-legales")
+def mentions(request: Request):
+    return _site_page("mentions-legales.html", request)
+
+
+@app.get("/robots.txt")
+def robots(request: Request):
+    u = _site_url(request)
+    return Response(f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /app\nSitemap: {u}/sitemap.xml\n", media_type="text/plain")
+
+
+@app.get("/sitemap.xml")
+def sitemap(request: Request):
+    u = _site_url(request)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+           f"  <url><loc>{u}/</loc><changefreq>monthly</changefreq><priority>1.0</priority></url>\n</urlset>\n")
+    return Response(xml, media_type="application/xml")
+
+
 app.mount("/static", StaticFiles(directory=FRONT), name="static")
+app.mount("/site", StaticFiles(directory=SITE), name="site")

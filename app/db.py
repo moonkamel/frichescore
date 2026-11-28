@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS organismes (id TEXT PRIMARY KEY, nom TEXT NOT NULL, c
 CREATE TABLE IF NOT EXISTS utilisateurs (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, nom TEXT,
     organisme_id TEXT, role TEXT NOT NULL, mdp TEXT, actif INTEGER DEFAULT 1, cree_le TEXT, derniere_connexion TEXT);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, utilisateur_id INTEGER, cree_le TEXT, expire_le TEXT);
+CREATE TABLE IF NOT EXISTS demandes (id INTEGER PRIMARY KEY AUTOINCREMENT, cree_le TEXT, nom TEXT, email TEXT,
+    organisme TEXT, profil TEXT, territoire TEXT, message TEXT);
 CREATE TABLE IF NOT EXISTS reglages (cle TEXT PRIMARY KEY, valeur TEXT NOT NULL, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS maj_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT, debut TEXT, fin TEXT, declencheur TEXT, etat TEXT, resume TEXT);
@@ -667,3 +669,15 @@ def session_user(token_hash: str) -> dict | None:
 def session_delete(token_hash: str) -> None:
     with conn() as c:
         c.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
+# -------------------------------------------------------------- demandes de démonstration
+def demande_add(d: dict) -> None:
+    with conn() as c:
+        c.execute("INSERT INTO demandes (cree_le, nom, email, organisme, profil, territoire, message) VALUES (?,?,?,?,?,?,?)",
+                  (now(), d.get("nom"), d.get("email"), d.get("organisme"), d.get("profil"), d.get("territoire"), d.get("message")))
+
+
+def demande_list(limit: int = 200) -> list[dict]:
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM demandes ORDER BY id DESC LIMIT ?", (limit,))]

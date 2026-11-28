@@ -235,6 +235,16 @@ Une base locale existante est migrée automatiquement : ses données deviennent 
 Reste à faire avant une mise en production : base PostgreSQL (SQLite convient pour quelques organismes),
 sauvegardes, HTTPS par un proxy inverse, contrat de sous-traitance RGPD avec chaque client.
 
+## Page de présentation publique
+
+`site/index.html` : page d'accueil commerciale (fonctionnalités, méthode, public visé, sources, FAQ, formulaire de
+démonstration). En ligne (`FRICHESCORE_AUTH=1`), elle est servie à la racine `/` et l'application passe sous `/app` ;
+en local, elle reste consultable sous `/presentation`. Les demandes de démonstration sont enregistrées en base et
+listées dans l'onglet **Organismes** (administrateur de la plateforme). Régler `FRICHESCORE_SITE_URL`
+(ex. `https://www.mondomaine.fr`) pour l'URL canonique, `robots.txt` et `sitemap.xml`. Les mentions légales
+(`site/mentions-legales.html`) contiennent des champs **[À compléter]** avant publication. Étude de mots-clés :
+[`docs/referencement.md`](docs/referencement.md).
+
 ## Extraction de documents par l'IA (optionnelle)
 
 Dans la fiche d'une friche, **Documents — analyse par IA** : déposez un PDF (étude de sol, diagnostic, acte, courrier
